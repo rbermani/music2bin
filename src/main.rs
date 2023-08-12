@@ -1,8 +1,8 @@
 #[macro_use]
 extern crate failure;
+mod bin_decoder;
+mod bin_encoder;
 mod bin_to_xml;
-mod decoder;
-mod encoder;
 mod layout;
 mod music_xml_types;
 mod notation;
@@ -32,7 +32,7 @@ enum Mode {
 )]
 
 struct CliOpts {
-    #[structopt(default_value = "single_measure.musicxml", parse(from_os_str))]
+    #[structopt(default_value = "frelise.musicxml", parse(from_os_str))]
     input: PathBuf,
     #[structopt(default_value = "music.bin", parse(from_os_str))]
     output: PathBuf,

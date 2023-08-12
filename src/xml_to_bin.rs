@@ -1,4 +1,4 @@
-use crate::encoder::MusicEncoder;
+use crate::bin_encoder::MusicEncoder;
 use crate::notation::*;
 use failure::Error;
 use roxmltree::*;
@@ -68,7 +68,10 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf) -> Result<(), Error> 
             };
         println!("{:?}", keysig);
 
-        let tempo: Option<Tempo> = match measure.descendants().find(|n| n.has_tag_name("sound")) {
+        let tempo: Option<Tempo> = match measure
+            .descendants()
+            .find(|n| n.has_tag_name("sound") && n.attribute("tempo").is_some())
+        {
             Some(n) => Tempo::from_str(n.attribute("tempo").unwrap()).ok(),
             None => None,
         };
@@ -163,7 +166,7 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf) -> Result<(), Error> 
         let mut slur_engaged = false;
         for note in notes {
             let mut note_data = NoteData::default();
-            let note_type = note.children().find(|n| n.has_tag_name("type")).unwrap();
+            let note_type = note.children().find(|n| n.has_tag_name("type"));
             let notations_tag = note.children().find(|n| n.has_tag_name("notations"));
             let rest_tag = note.children().find(|n| n.has_tag_name("rest"));
             let staff_text = note
@@ -174,10 +177,10 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf) -> Result<(), Error> 
                 .unwrap();
             match staff_text {
                 "1" => {
-                    note_data.rh_lh = RightHandLeftHand::RightHand;
+                    note_data.treble_bass = TrebleBassClef::TrebleClef;
                 }
                 "2" => {
-                    note_data.rh_lh = RightHandLeftHand::LeftHand;
+                    note_data.treble_bass = TrebleBassClef::BassClef;
                 }
                 _ => {
                     panic!("Unhandled staff tag value case");
@@ -241,12 +244,16 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf) -> Result<(), Error> 
                 }
                 None => (),
             }
-            note_data.rhythm_value = Duration::from_str(note_type.text().unwrap()).unwrap();
+            note_data.rhythm_value = if let Some(n) = note_type {
+                Duration::from_str(n.text().unwrap()).unwrap()
+            } else {
+                Duration::from_str("whole").unwrap()
+            };
 
             match rest_tag {
                 Some(_) => {
                     println!("rest {:?}", note_data.rhythm_value);
-                    note_data.note_rest = 0;
+                    note_data.note_rest = NoteRestValue::Rest;
                 }
                 None => {
                     let pitch_tag = note.children().find(|n| n.has_tag_name("pitch")).unwrap();
@@ -259,20 +266,20 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf) -> Result<(), Error> 
                         Some(t) => Alter::from_str(t.text().unwrap()).unwrap(),
                         None => Alter::None,
                     };
-                    note_data.note_rest = NoteData::encode_numeric_note(
+                    note_data.note_rest = NoteRestValue::derive_numeric_note(
                         Note::from_str(step_tag.unwrap().text().unwrap()).unwrap(),
                         alter_note,
                         Octave::from_str(octave_tag.unwrap().text().unwrap()).unwrap(),
                     )
-                    .expect("Parsed note is not supported by ImgMusic format.");
+                    .expect("Parsed note is not supported by Music2Bin format.");
                     println!(
-                        "note {:?} number: {}",
+                        "note {:?} number: {:?}",
                         note_data.rhythm_value, note_data.note_rest
                     );
                 }
             }
 
-            complete_music.push(MusicElement::NoteRest((note_data)));
+            complete_music.push(MusicElement::NoteRest(note_data));
         }
         complete_music.push(MusicElement::MeasureMeta(measure_meta_end));
     }
@@ -293,9 +300,11 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf) -> Result<(), Error> 
             MusicElement::NoteRest(n) => {
                 music_encoder.insert_note_data(n)?;
             }
+            MusicElement::Tuplet(t) => {
+                music_encoder.insert_tuplet_data(t)?;
+            }
         }
     }
     music_encoder.flush()?;
-
     Ok(())
 }

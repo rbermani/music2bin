@@ -17,19 +17,17 @@ use std::io::BufReader;
 fn parse_measure_init(input: &[u8]) -> IResult<&[u8], MusicElement> {
     let take_bits = tuple((
         take(3usize),
-        take(4usize),
         take(3usize),
         take(2usize),
         take(4usize),
         take(4usize),
         take(4usize),
+        take(7usize),
     ));
     bits::<_, _, Error<(&[u8], usize)>, _, _>(take_bits)(input).and_then(
-        |(inp, (id, tempo, beats, beat_type, fifths, t_dynamics, b_dyanamics))| {
+        |(inp, (id, beats, beat_type, fifths, t_dynamics, b_dyanamics, tempo))| {
             let _id: MusicTagIdentifiers =
                 FromPrimitive::from_u8(id).ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
-            let tempo = FromPrimitive::from_u8(tempo)
-                .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let beats = FromPrimitive::from_u8(beats)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let beat_type = FromPrimitive::from_u8(beat_type)
@@ -40,15 +38,16 @@ fn parse_measure_init(input: &[u8]) -> IResult<&[u8], MusicElement> {
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let bass_dynamics = FromPrimitive::from_u8(b_dyanamics)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
+            let tempo = Tempo::new_from_raw(tempo);
             Ok((
                 inp,
                 MusicElement::MeasureInit(MeasureInitializer {
-                    tempo,
                     beats,
                     beat_type,
                     key_sig,
                     treble_dynamics,
                     bass_dynamics,
+                    tempo,
                 }),
             ))
         },
@@ -93,6 +92,7 @@ fn parse_note_data_rest(input: &[u8]) -> IResult<&[u8], MusicElement> {
         take(2usize),
         take(1usize),
         take(1usize),
+        take(1usize),
     ));
     bits::<_, _, Error<(&[u8], usize)>, _, _>(take_bits)(input).and_then(
         |(
@@ -107,14 +107,14 @@ fn parse_note_data_rest(input: &[u8]) -> IResult<&[u8], MusicElement> {
                 articulation,
                 trill,
                 ties,
-                rh_lh,
+                treble_bass,
                 stress,
+                chord,
             ),
         )| {
             let _id: MusicTagIdentifiers =
                 FromPrimitive::from_u8(id).ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
-            let note_rest = FromPrimitive::from_u8(note_rest)
-                .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
+            let note_rest = NoteRestValue::new_from_numeric(note_rest);
             let phrase_dynamics = FromPrimitive::from_u8(phrase_dynamics)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let rhythm_value = FromPrimitive::from_u8(rhythm_value)
@@ -129,9 +129,11 @@ fn parse_note_data_rest(input: &[u8]) -> IResult<&[u8], MusicElement> {
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let ties = FromPrimitive::from_u8(ties)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
-            let rh_lh = FromPrimitive::from_u8(rh_lh)
+            let treble_bass = FromPrimitive::from_u8(treble_bass)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let stress = FromPrimitive::from_u8(stress)
+                .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
+            let chord = FromPrimitive::from_u8(chord)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             Ok((
                 inp,
@@ -144,8 +146,9 @@ fn parse_note_data_rest(input: &[u8]) -> IResult<&[u8], MusicElement> {
                     articulation,
                     trill,
                     ties,
-                    rh_lh,
+                    treble_bass,
                     stress,
+                    chord,
                 }),
             ))
         },
@@ -159,7 +162,7 @@ fn parse_id(input: &[u8]) -> IResult<&[u8], MusicTagIdentifiers> {
             Some(tag_id) => {
                 return Ok((input, tag_id));
             }
-            _ => return { Err(Err::Error(Error::new(input, ErrorKind::Alt))) },
+            _ => return Err(Err::Error(Error::new(input, ErrorKind::Alt))),
         }
     })
 }
@@ -170,7 +173,7 @@ fn music_element(input: &[u8]) -> IResult<&[u8], MusicElement> {
     }
 
     let id = parse_id(input).expect("Not enough bits for identifier.");
-    println!("music element");
+
     match id.1 {
         MusicTagIdentifiers::MeasureInitializerTag => parse_measure_init(id.0),
         MusicTagIdentifiers::MeasureMetaDataTag => parse_measure_meta(id.0),
@@ -244,7 +247,7 @@ mod tests {
         assert_eq!(
             elems.unwrap().get(0),
             Some(&MusicElement::NoteRest(NoteData {
-                note_rest: 65,
+                note_rest: NoteRestValue::new_from_numeric(65),
                 phrase_dynamics: PhraseDynamics::None,
                 rhythm_value: Duration::Crochet,
                 arpeggiate: Arpeggiate::NoArpeggiation,
@@ -252,8 +255,9 @@ mod tests {
                 articulation: Articulation::None,
                 trill: Trill::None,
                 ties: NoteConnection::NoTie,
-                rh_lh: RightHandLeftHand::RightHand,
+                treble_bass: TrebleBassClef::TrebleClef,
                 stress: Stress::NotAccented,
+                chord: Chord::NoChord,
             }))
         );
 
@@ -282,7 +286,8 @@ mod tests {
         let mut music_dec = MusicDecoder::new(None);
 
         // Positive case examples
-        let music_init_data: &[u8] = &[0x12, 0x90, 0x17];
+        //let music_init_data: &[u8] = &[0x01, 0x48, 0x0B, 0xB2];
+        let music_init_data: &[u8] = &[0x09, 0x01, 0x76, 0x40];
         music_dec.raw_read(music_init_data);
 
         let elems = music_dec.parse_data();
@@ -292,12 +297,12 @@ mod tests {
         assert_eq!(
             elems.unwrap().get(0),
             Some(&MusicElement::MeasureInit(MeasureInitializer {
-                tempo: Tempo::Allegro,
                 beats: Beats::Four,
                 beat_type: BeatType::Four,
                 key_sig: KeySignature::CMajorAminor,
                 treble_dynamics: Dynamics::Pianissimo,
                 bass_dynamics: Dynamics::Fortississimo,
+                tempo: Tempo::default(),
             }))
         );
 

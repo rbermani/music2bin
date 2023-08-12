@@ -1,4 +1,4 @@
-use crate::decoder::MusicDecoder;
+use crate::bin_decoder::MusicDecoder;
 use crate::function;
 use crate::notation::*;
 use crate::xml_ser::serialize_xml;

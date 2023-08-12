@@ -1,5 +1,7 @@
 # music2bin
 
+[![Rust](https://github.com/rbermani/music2bin/actions/workflows/rust.yml/badge.svg)](https://github.com/rbermani/music2bin/actions/workflows/rust.yml)
+
 An application for condensing musical content represented using MusicXML into a minimal condensed binary format targeted at ML transformer model training.
 
 The objective is to fit entire musical compositions (jazz, pop, classical), represented on a grand staff, into the token limit of a transformer.
