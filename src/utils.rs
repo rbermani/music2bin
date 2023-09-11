@@ -9,3 +9,24 @@ macro_rules! function {
         &name[..name.len() - 3]
     }};
 }
+
+#[cfg(windows)]
+pub const NL: &'static str = "\r\n";
+#[cfg(not(windows))]
+pub const NL: &'static str = "\n";
+
+pub mod into_option {
+    pub trait IntoOption<T> {
+        fn into_option(self) -> Option<Vec<T>>;
+    }
+
+    impl<T> IntoOption<T> for Vec<T> {
+        fn into_option(self) -> Option<Vec<T>> {
+            if self.is_empty() {
+                None
+            } else {
+                Some(self)
+            }
+        }
+    }
+}

@@ -12,3 +12,5 @@ Reducing the informational content down to a condensed format that contains the 
 
 After a model is generated through training, the application can be used to transform the generated binary output back into a MusicXML representation that will be viewable by tools such as MuseScore, and easily converted back into a MIDI representation for playback.
 
+
+**Note: This project is in pre-Alpha state and subject to frequent & major breaking API changes. **

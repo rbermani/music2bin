@@ -1,5 +1,5 @@
-use crate::notation::{Dynamics, NoteData, NoteRestValue, TupletNumber};
-use failure::Error;
+use crate::notation::*;
+
 use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -67,19 +67,29 @@ pub enum MXmlDynamics {
 }
 
 impl MXmlDynamics {
-    pub fn from_dynamics(dynamics: Dynamics) -> MXmlDynamics {
+    pub fn from_dynamics(dynamics: PhraseDynamics) -> Option<MXmlDynamics> {
         match dynamics {
-            Dynamics::Pianississimo => MXmlDynamics::Ppp,
-            Dynamics::Pianissimo => MXmlDynamics::Pp,
-            Dynamics::Piano => MXmlDynamics::P,
-            Dynamics::Forte => MXmlDynamics::F,
-            Dynamics::Fortissimo => MXmlDynamics::Ff,
-            Dynamics::Fortississimo => MXmlDynamics::Fff,
-            Dynamics::MezzoPiano => MXmlDynamics::Mp,
-            Dynamics::MezzoForte => MXmlDynamics::Mf,
+            PhraseDynamics::None => None,
+            PhraseDynamics::Pianississimo => Some(MXmlDynamics::Ppp),
+            PhraseDynamics::Pianissimo => Some(MXmlDynamics::Pp),
+            PhraseDynamics::Piano => Some(MXmlDynamics::P),
+            PhraseDynamics::Forte => Some(MXmlDynamics::F),
+            PhraseDynamics::Fortissimo => Some(MXmlDynamics::Ff),
+            PhraseDynamics::Fortississimo => Some(MXmlDynamics::Fff),
+            PhraseDynamics::MezzoPiano => Some(MXmlDynamics::Mp),
+            PhraseDynamics::MezzoForte => Some(MXmlDynamics::Mf),
+            _ => Some(MXmlDynamics::P),
         }
     }
 }
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct DynamicsElement {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dynamics: Option<MXmlDynamics>,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub struct WordsElement {
@@ -90,7 +100,7 @@ pub struct WordsElement {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DirectionType {
-    Dynamics(MXmlDynamics),
+    Dynamics(DynamicsElement),
     Segno,
     Coda,
     Words(WordsElement),
@@ -137,44 +147,60 @@ pub struct AttributesElement {
 #[serde(rename_all = "kebab-case")]
 pub struct PitchElement {
     pub step: String,
-    pub octave: i8,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alter: Option<String>,
+    pub octave: i8,
 }
-#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+
+#[derive(Clone, Copy, Default, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum TupletType {
+    #[default]
     Start,
     Stop,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-#[repr(u8)]
-pub enum MXmlTupletNumber {
-    TupletOne = 1,
-    TupletTwo = 2,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub struct TupletElement {
     #[serde(rename(serialize = "@type"))]
     pub r#type: TupletType,
     #[serde(rename(serialize = "@number"))]
-    pub number: MXmlTupletNumber,
+    pub number: String,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct TiedElement {
+    #[serde(rename(serialize = "@type"))]
+    pub r#type: TupletType,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct SlurElement {
+    #[serde(rename(serialize = "@type"))]
+    pub r#type: TupletType,
+    #[serde(rename(serialize = "@number"))]
+    pub number: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Notations {
-    Tied,
-    Slur,
+    Tied(TiedElement),
+    Slur(SlurElement),
     Tuplet(TupletElement),
     Articulations,
     Dynamics,
     Fermata,
     Arpeggiate,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct NotationsElement {
+    pub notations: Vec<Notations>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -190,8 +216,7 @@ impl From<NoteRestValue> for PitchRest {
         } else {
             if let Some((step, alter, octave)) = note_data.decode_composite_note() {
                 // TODO: Make this logic for processing alter string more terse
-                let alter_string = alter.to_string();
-                if alter_string.eq("0") {
+                if alter == Alter::None {
                     return PitchRest::Pitch(PitchElement {
                         step: step.to_string(),
                         octave: octave as i8,
@@ -201,11 +226,11 @@ impl From<NoteRestValue> for PitchRest {
                     return PitchRest::Pitch(PitchElement {
                         step: step.to_string(),
                         octave: octave as i8,
-                        alter: Some(alter_string),
+                        alter: Some(alter.to_string()),
                     });
                 }
             } else {
-                return PitchRest::Rest;
+                panic!("Decode composite note failed");
             }
         }
     }
@@ -219,23 +244,109 @@ pub struct TimeModificationElement {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename = "chord")]
 #[serde(rename_all = "kebab-case")]
-pub struct ChordElement();
+pub struct ChordElement {}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct DotElement {}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct GraceElement {
+    #[serde(rename(serialize = "@slash"))]
+    pub slash: String,
+}
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub struct NoteElement {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub chord: Option<ChordElement>,
-    pub pitch: PitchRest,
+    chord: Option<ChordElement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grace: Option<GraceElement>,
+    pitch: PitchRest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration: Option<String>,
+    voice: String,
+    r#type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dot: Option<DotElement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_modification: Option<TimeModificationElement>,
+    staff: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notations: Option<NotationsElement>,
+}
+
+impl NoteElement {
+    pub fn new(
+        note: NoteData,
+        divisions: u32,
+        beats: Beats,
+        beat_type: BeatType,
+        t_modification: Option<TimeModificationElement>,
+        notations: Option<NotationsElement>,
+        num_voices: usize,
+    ) -> Self {
+        Self {
+            chord: if note.chord.eq(&Chord::Chord) {
+                Some(ChordElement {})
+            } else {
+                None
+            },
+            grace: if note.special_note != SpecialNote::None {
+                Some(GraceElement {
+                    slash: note.special_note.to_string(),
+                })
+            } else {
+                None
+            },
+            pitch: PitchRest::from(note.note_rest),
+            duration: if note.special_note == SpecialNote::None {
+                Some(note.get_duration_string(
+                    divisions,
+                    u32::from(beats),
+                    u32::from(beat_type),
+                    t_modification.map(|v| TimeModification::from(v)),
+                ))
+            } else {
+                None
+            },
+            dot: if note.dotted {
+                Some(DotElement {})
+            } else {
+                None
+            },
+            voice: (note.voice as u8 + 1).to_string(),
+            r#type: note.note_type.get_type_string(),
+            time_modification: t_modification,
+            staff: Self::get_staff(note.voice, num_voices),
+            notations: notations,
+        }
+    }
+
+    pub fn get_staff(voice: Voice, num_voices: usize) -> String {
+        if num_voices < 3 {
+            if voice == Voice::One {
+                return 1.to_string();
+            } else {
+                return 2.to_string();
+            }
+        } else {
+            if voice == Voice::One || voice == Voice::Two {
+                return 1.to_string();
+            } else {
+                return 2.to_string();
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct BackupElement {
     pub duration: String,
-    pub r#type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub time_modification: Option<TimeModificationElement>,
-    pub staff: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notations: Option<Vec<Notations>>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -243,8 +354,46 @@ pub struct NoteElement {
 pub enum MeasureDirectionNote {
     None,
     Direction(DirectionElement),
+    Barline(BarlineElement),
     Note(NoteElement),
+    Backup(BackupElement),
 }
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct EndingElement {
+    #[serde(rename(serialize = "@number"), skip_serializing_if = "Option::is_none")]
+    pub number: Option<String>,
+    #[serde(rename(serialize = "@type"), skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<String>,
+    #[serde(rename = "$value", skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct RepeatElement {
+    #[serde(
+        rename(serialize = "@direction"),
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub direction: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct BarlineElement {
+    #[serde(
+        rename(serialize = "@location"),
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ending: Option<EndingElement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<RepeatElement>,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub struct Measure {

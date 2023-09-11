@@ -1,12 +1,12 @@
-use crate::layout::*;
+use crate::bin_encoder::*;
+use crate::error;
 use crate::notation::*;
-use failure::err_msg;
-use failure::Error as FailureError;
 use io::Read;
+use log::error;
 use nom::bits::{bits, streaming::take};
 use nom::combinator::all_consuming;
 use nom::error::{Error, ErrorKind};
-use nom::multi::many0;
+use nom::multi::{count, many0};
 use nom::sequence::tuple;
 use nom::{Err, IResult, Needed};
 use num_traits::FromPrimitive;
@@ -16,16 +16,16 @@ use std::io::BufReader;
 
 fn parse_measure_init(input: &[u8]) -> IResult<&[u8], MusicElement> {
     let take_bits = tuple((
-        take(3usize),
+        take(2usize),
         take(3usize),
         take(2usize),
         take(4usize),
-        take(4usize),
-        take(4usize),
         take(7usize),
+        take(8usize),
+        take(5usize),
     ));
     bits::<_, _, Error<(&[u8], usize)>, _, _>(take_bits)(input).and_then(
-        |(inp, (id, beats, beat_type, fifths, t_dynamics, b_dyanamics, tempo))| {
+        |(inp, (id, beats, beat_type, fifths, tempo, reserve_bits, reserve_bits_2))| {
             let _id: MusicTagIdentifiers =
                 FromPrimitive::from_u8(id).ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let beats = FromPrimitive::from_u8(beats)
@@ -34,19 +34,15 @@ fn parse_measure_init(input: &[u8]) -> IResult<&[u8], MusicElement> {
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let key_sig = FromPrimitive::from_u8(fifths)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
-            let treble_dynamics = FromPrimitive::from_u8(t_dynamics)
-                .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
-            let bass_dynamics = FromPrimitive::from_u8(b_dyanamics)
-                .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let tempo = Tempo::new_from_raw(tempo);
+            let _throwaway: u8 = reserve_bits;
+            let _throwaway2: u8 = reserve_bits_2;
             Ok((
                 inp,
                 MusicElement::MeasureInit(MeasureInitializer {
                     beats,
                     beat_type,
                     key_sig,
-                    treble_dynamics,
-                    bass_dynamics,
                     tempo,
                 }),
             ))
@@ -55,23 +51,31 @@ fn parse_measure_init(input: &[u8]) -> IResult<&[u8], MusicElement> {
 }
 
 fn parse_measure_meta(input: &[u8]) -> IResult<&[u8], MusicElement> {
-    let take_bits = tuple((take(3usize), take(1usize), take(1usize), take(3usize)));
+    let take_bits = tuple((
+        take(2usize),
+        take(2usize),
+        take(2usize),
+        take(3usize),
+        take(7usize),
+        count(take(8usize), 2),
+    ));
     bits::<_, _, Error<(&[u8], usize)>, _, _>(take_bits)(input).and_then(
-        |(inp, (id, start_end, repeat, dal_segno))| {
+        |(inp, (id, start_end, ending, dal_segno, throwaway, throwaway_vec))| {
             let _id: MusicTagIdentifiers =
                 FromPrimitive::from_u8(id).ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let start_end = FromPrimitive::from_u8(start_end)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
-            let repeat = FromPrimitive::from_u8(repeat)
+            let ending = FromPrimitive::from_u8(ending)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let dal_segno = FromPrimitive::from_u8(dal_segno)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
-
+            let _throwaway: u8 = throwaway;
+            let _throwaway_vec: Vec<u8> = throwaway_vec;
             Ok((
                 inp,
                 MusicElement::MeasureMeta(MeasureMetaData {
                     start_end,
-                    repeat,
+                    ending,
                     dal_segno,
                 }),
             ))
@@ -81,18 +85,20 @@ fn parse_measure_meta(input: &[u8]) -> IResult<&[u8], MusicElement> {
 
 fn parse_note_data_rest(input: &[u8]) -> IResult<&[u8], MusicElement> {
     let take_bits = tuple((
-        take(3usize),
+        take(2usize),
         take(7usize),
         take(4usize),
         take(3usize),
         take(1usize),
+        take(1usize),
         take(2usize),
         take(2usize),
         take(2usize),
         take(2usize),
         take(1usize),
         take(1usize),
-        take(1usize),
+        take(2usize),
+        take(2usize),
     ));
     bits::<_, _, Error<(&[u8], usize)>, _, _>(take_bits)(input).and_then(
         |(
@@ -102,14 +108,16 @@ fn parse_note_data_rest(input: &[u8]) -> IResult<&[u8], MusicElement> {
                 note_rest,
                 phrase_dynamics,
                 rhythm_value,
+                dotted,
                 arpeggiate,
                 special_note,
                 articulation,
                 trill,
                 ties,
-                treble_bass,
                 stress,
                 chord,
+                slur,
+                voice,
             ),
         )| {
             let _id: MusicTagIdentifiers =
@@ -119,6 +127,8 @@ fn parse_note_data_rest(input: &[u8]) -> IResult<&[u8], MusicElement> {
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let rhythm_value = FromPrimitive::from_u8(rhythm_value)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
+            let dotted: u8 = dotted;
+            let dotted = dotted != 0u8;
             let arpeggiate = FromPrimitive::from_u8(arpeggiate)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let special_note = FromPrimitive::from_u8(special_note)
@@ -129,26 +139,80 @@ fn parse_note_data_rest(input: &[u8]) -> IResult<&[u8], MusicElement> {
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let ties = FromPrimitive::from_u8(ties)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
-            let treble_bass = FromPrimitive::from_u8(treble_bass)
-                .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let stress = FromPrimitive::from_u8(stress)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let chord = FromPrimitive::from_u8(chord)
+                .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
+            let slur = FromPrimitive::from_u8(slur)
+                .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
+            let voice = FromPrimitive::from_u8(voice)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             Ok((
                 inp,
                 MusicElement::NoteRest(NoteData {
                     note_rest,
                     phrase_dynamics,
-                    rhythm_value,
+                    note_type: rhythm_value,
+                    dotted,
                     arpeggiate,
                     special_note,
                     articulation,
                     trill,
                     ties,
-                    treble_bass,
                     stress,
                     chord,
+                    slur,
+                    voice,
+                }),
+            ))
+        },
+    )
+}
+
+fn parse_tuplet_data(input: &[u8]) -> IResult<&[u8], MusicElement> {
+    let take_bits = tuple((
+        take(2usize),
+        take(2usize),
+        take(3usize),
+        take(3usize),
+        take(3usize),
+        take(1usize),
+        take(1usize),
+        count(take(8usize), 2),
+    ));
+    bits::<_, _, Error<(&[u8], usize)>, _, _>(take_bits)(input).and_then(
+        |(
+            inp,
+            (
+                id,
+                start_stop,
+                tuplet_number,
+                actual_notes,
+                normal_notes,
+                dotted,
+                reservebit,
+                throwaway,
+            ),
+        )| {
+            let _id: MusicTagIdentifiers =
+                FromPrimitive::from_u8(id).ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
+            let start_stop = FromPrimitive::from_u8(start_stop)
+                .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
+            let tuplet_number = FromPrimitive::from_u8(tuplet_number)
+                .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
+            let dotted: u8 = dotted;
+            let dotted = dotted != 0u8;
+            let _reservebit: u8 = reservebit;
+            let _throwaway: Vec<u8> = throwaway;
+
+            Ok((
+                inp,
+                MusicElement::Tuplet(TupletData {
+                    start_stop,
+                    tuplet_number,
+                    actual_notes,
+                    normal_notes,
+                    dotted,
                 }),
             ))
         },
@@ -156,7 +220,7 @@ fn parse_note_data_rest(input: &[u8]) -> IResult<&[u8], MusicElement> {
 }
 
 fn parse_id(input: &[u8]) -> IResult<&[u8], MusicTagIdentifiers> {
-    bits::<_, _, Error<(&[u8], usize)>, _, _>(take(3usize))(input).and_then(|id| {
+    bits::<_, _, Error<(&[u8], usize)>, _, _>(take(2usize))(input).and_then(|id| {
         let tag_id: Option<MusicTagIdentifiers> = FromPrimitive::from_u8(id.1);
         match tag_id {
             Some(tag_id) => {
@@ -169,25 +233,27 @@ fn parse_id(input: &[u8]) -> IResult<&[u8], MusicTagIdentifiers> {
 
 fn music_element(input: &[u8]) -> IResult<&[u8], MusicElement> {
     if input.len() == 0 {
+        // This error is expected for EOF condition/ completion of parsing
         return Err(Err::Error(Error::new(input, ErrorKind::Eof)));
     }
 
     let id = parse_id(input).expect("Not enough bits for identifier.");
-
     match id.1 {
         MusicTagIdentifiers::MeasureInitializerTag => parse_measure_init(id.0),
         MusicTagIdentifiers::MeasureMetaDataTag => parse_measure_meta(id.0),
         MusicTagIdentifiers::NoteDataTag => parse_note_data_rest(id.0),
-        _ => Err(Err::Error(Error::new(input, ErrorKind::Alt))),
+        MusicTagIdentifiers::TupletTag => parse_tuplet_data(id.0),
     }
 }
 
 fn parse_music_bin(input: &[u8], size: usize) -> IResult<&[u8], Vec<MusicElement>> {
     if input.len() < size {
+        error!("input length of vector less than specified size");
         return Err(Err::Incomplete(Needed::new(size)));
     }
 
     if size < 1 {
+        error!("input length too short.");
         return Err(Err::Incomplete(Needed::new(1)));
     }
     let results = all_consuming(many0(music_element))(input);
@@ -205,12 +271,14 @@ impl MusicDecoder {
         MusicDecoder { r, data: vec![] }
     }
 
-    pub fn reader_read(&mut self) -> Result<(), FailureError> {
+    pub fn reader_read(&mut self) -> error::Result<()> {
         match &mut self.r {
-            None => Err(err_msg("Reader is missing.")),
+            None => Err(error::Error::MissingReader),
             Some(r) => {
-                let bytes_read = r.read_to_end(&mut self.data)?;
-                println!("read {} bytes", bytes_read);
+                let _bytes_read = r
+                    .read_to_end(&mut self.data)
+                    .map_err(|e| error::Error::IoKind(e.kind().to_string()))?;
+                //println!("read {} bytes", bytes_read);
                 Ok(())
             }
         }
@@ -224,10 +292,10 @@ impl MusicDecoder {
         self.data.extend_from_slice(bytes);
     }
 
-    pub fn parse_data(&self) -> Result<Vec<MusicElement>, FailureError> {
+    pub fn parse_data(&self) -> error::Result<Vec<MusicElement>> {
         match parse_music_bin(&self.data, self.data.len()) {
             Ok((_, r)) => Ok(r),
-            _ => Err(err_msg("Unknown")),
+            _ => Err(error::Error::DecodingError),
         }
     }
 }
@@ -249,15 +317,17 @@ mod tests {
             Some(&MusicElement::NoteRest(NoteData {
                 note_rest: NoteRestValue::new_from_numeric(65),
                 phrase_dynamics: PhraseDynamics::None,
-                rhythm_value: Duration::Crochet,
+                note_type: NoteType::Crochet,
+                dotted: false,
                 arpeggiate: Arpeggiate::NoArpeggiation,
                 special_note: SpecialNote::None,
                 articulation: Articulation::None,
                 trill: Trill::None,
                 ties: NoteConnection::NoTie,
-                treble_bass: TrebleBassClef::TrebleClef,
                 stress: Stress::NotAccented,
                 chord: Chord::NoChord,
+                slur: SlurConnection::NoSlur,
+                voice: Voice::One,
             }))
         );
 
@@ -266,7 +336,7 @@ mod tests {
     #[test]
     fn test_music_meta_parse() {
         let mut music_dec = MusicDecoder::new(None);
-        let measure_meta_data: &[u8] = &[0x20];
+        let measure_meta_data: &[u8] = &[0x20, 0x00, 0x00, 0x00];
         music_dec.raw_read(measure_meta_data);
         let elems = music_dec.parse_data();
         assert!(elems.is_ok());
@@ -275,7 +345,7 @@ mod tests {
             elems.unwrap().get(0),
             Some(&MusicElement::MeasureMeta(MeasureMetaData {
                 start_end: MeasureStartEnd::MeasureStart,
-                repeat: Repeats::NoRepeat,
+                ending: Ending::None,
                 dal_segno: DalSegno::None
             }))
         );
@@ -286,7 +356,6 @@ mod tests {
         let mut music_dec = MusicDecoder::new(None);
 
         // Positive case examples
-        //let music_init_data: &[u8] = &[0x01, 0x48, 0x0B, 0xB2];
         let music_init_data: &[u8] = &[0x09, 0x01, 0x76, 0x40];
         music_dec.raw_read(music_init_data);
 
