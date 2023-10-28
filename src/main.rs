@@ -44,10 +44,8 @@ struct CliOpts {
         parse(from_os_str)
     )]
     output: PathBuf,
-    #[structopt(short = "d", long = "dumpin")]
+    #[structopt(short = "d", long = "dump")]
     dump_input: bool,
-    #[structopt(short = "g", long = "dumpout")]
-    dump_output: bool,
     #[structopt(subcommand)]
     mode: Option<Mode>,
 }
@@ -63,7 +61,7 @@ fn main() -> Result<(), Error> {
         }
         _ => {
             // default case for either no subcommand or Xml2Bin is perform process_xml_to_bin
-            process_xml_to_bin(cli_opt.input, cli_opt.output, cli_opt.dump_output)?;
+            process_xml_to_bin(cli_opt.input, cli_opt.output, cli_opt.dump_input)?;
         }
     }
     Ok(())

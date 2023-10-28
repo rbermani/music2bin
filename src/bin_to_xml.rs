@@ -13,8 +13,8 @@ use std::path::PathBuf;
 const MAX_SUPPORTED_VOICES: usize = 4;
 
 fn handle_measure_init(
-    m: &mut Measure,
     e: MeasureInitializer,
+    m: &mut Measure,
     divisions: u32,
     cur_measure_idx: i32,
     cur_beat: &mut Beats,
@@ -61,8 +61,8 @@ fn handle_measure_init(
 }
 
 fn handle_measure_meta(
-    m: &mut Measure,
     e: MeasureMetaData,
+    m: &mut Measure,
     cur_measure_idx: &mut i32,
     measures: &mut Vec<Measure>,
     prev_voice: &mut Option<Voice>,
@@ -136,36 +136,35 @@ fn handle_measure_meta(
 }
 
 fn handle_note_rest(
-    m: &mut Measure,
     e: NoteData,
+    m: &mut Measure,
     divisions: u32,
     prev_voice: &mut Option<Voice>,
     measure_duration_tally: &mut u32,
     cur_tuplet_info: &mut Option<TupletElement>,
-    cur_t_modification: &mut Option<TimeModificationElement>,
+    cur_t_modification: &Option<TimeModificationElement>,
     cur_beat: Beats,
     cur_beat_type: BeatType,
     num_voices: usize,
 ) {
-    let mut clear_tup = false;
-    let mut clear_tmod = false;
-    let te = cur_tuplet_info.clone();
     // Build the notations Vec here
     let mut notations = None;
     let mut notations_elems = vec![];
-    if te.is_some() {
-        let te_val = te.unwrap();
-        let te_type = te_val.r#type;
-        notations_elems.push(Notations::Tuplet(te_val));
-
-        if te_type == TupletType::Stop {
-            clear_tup = true;
-            clear_tmod = true;
-        } else {
-            clear_tup = true;
+    if cur_tuplet_info.is_some() {
+        let te = cur_tuplet_info.clone().unwrap();
+        match te.r#type {
+            TupletType::Stop => {
+                panic!("Incorrectly formatted data. Tuplet Start should be handled elsewhere.")
+            }
+            TupletType::Start => {
+                notations_elems.push(Notations::Tuplet(te));
+                cur_tuplet_info.as_mut().unwrap().r#type = TupletType::None;
+            }
+            TupletType::None => (),
         }
     }
-    if let Some(cur_dynamic) = MXmlDynamics::from_dynamics(e.phrase_dynamics) {
+
+    if let Some(cur_dynamic) = DynamicsValue::from_dynamics(e.phrase_dynamics) {
         m.direction_note
             .push(MeasureDirectionNote::Direction(DirectionElement {
                 direction_type: DirectionTypeElement {
@@ -205,31 +204,32 @@ fn handle_note_rest(
     match e.ties {
         NoteConnection::EndTie => {
             notations_elems.push(Notations::Tied(TiedElement {
-                r#type: TupletType::Stop,
+                r#type: TiedType::Stop,
             }));
         }
         NoteConnection::NoTie => {}
         NoteConnection::StartTie => {
             notations_elems.push(Notations::Tied(TiedElement {
-                r#type: TupletType::Start,
+                r#type: TiedType::Start,
             }));
         }
     }
     match e.slur {
         SlurConnection::EndSlur => {
             notations_elems.push(Notations::Slur(SlurElement {
-                r#type: TupletType::Stop,
+                r#type: SlurType::Stop,
                 number: "1".to_string(),
             }));
         }
         SlurConnection::NoSlur => {}
         SlurConnection::StartSlur => {
             notations_elems.push(Notations::Slur(SlurElement {
-                r#type: TupletType::Start,
+                r#type: SlurType::Start,
                 number: "1".to_string(),
             }));
         }
     }
+
     if !notations_elems.is_empty() {
         notations = Some(NotationsElement {
             notations: notations_elems,
@@ -245,18 +245,13 @@ fn handle_note_rest(
             notations,
             num_voices,
         )));
-    if clear_tup {
-        *cur_tuplet_info = None;
-    }
-    if clear_tmod {
-        *cur_t_modification = None;
-    }
     *prev_voice = Some(e.voice);
     //prev_clef = Some(e.treble_bass);
 }
 
 fn handle_tuplet_data(
     t: TupletData,
+    m: &mut Measure,
     cur_tuplet_info: &mut Option<TupletElement>,
     cur_t_modification: &mut Option<TimeModificationElement>,
 ) {
@@ -278,13 +273,23 @@ fn handle_tuplet_data(
             *cur_tuplet_info = None;
         }
         TupletStartStop::TupletStop => {
-            *cur_tuplet_info = Some(TupletElement {
-                r#type: TupletType::Stop,
-                number: match t.tuplet_number {
-                    TupletNumber::TupletOne => "1".to_string(),
-                    TupletNumber::TupletTwo => "2".to_string(),
-                },
-            });
+            // Since Tuplet stop elements must come after the NoteData elements they encapsulate, but
+            // MusicXML tracks the Stop Tuplet event as part of the Note tag,
+            // we must search backwards through the measure to find the most
+            // recent NoteData element and insert the TupletStop information there.
+            for elem in m.direction_note.iter_mut().rev() {
+                match elem {
+                    MeasureDirectionNote::Note(ne) => {
+                        // First extract the current tuplet tracking number, which must be populated if we are getting a TupletStop
+                        let tuplet_number = cur_tuplet_info.clone().unwrap().number;
+                        ne.insert_stop_tuple(tuplet_number);
+                        break;
+                    }
+                    _ => (),
+                }
+            }
+            *cur_tuplet_info = None;
+            *cur_t_modification = None;
         }
     }
 }
@@ -306,24 +311,24 @@ fn serialize_xml(music: Vec<MusicElement>, divisions: u32, num_voices: usize) ->
     for elem in music {
         match elem {
             MusicElement::MeasureInit(e) => handle_measure_init(
-                &mut cur_measure,
                 e,
+                &mut cur_measure,
                 divisions,
                 cur_measure_idx,
                 &mut cur_beat,
                 &mut cur_beat_type,
             ),
             MusicElement::MeasureMeta(e) => handle_measure_meta(
-                &mut cur_measure,
                 e,
+                &mut cur_measure,
                 &mut cur_measure_idx,
                 &mut measures,
                 &mut prev_voice,
                 &mut measure_duration_tally,
             ),
             MusicElement::NoteRest(e) => handle_note_rest(
-                &mut cur_measure,
                 e,
+                &mut cur_measure,
                 divisions,
                 &mut prev_voice,
                 &mut measure_duration_tally,
@@ -333,9 +338,12 @@ fn serialize_xml(music: Vec<MusicElement>, divisions: u32, num_voices: usize) ->
                 cur_beat_type,
                 num_voices,
             ),
-            MusicElement::Tuplet(t) => {
-                handle_tuplet_data(t, &mut cur_tuplet_info, &mut cur_t_modification)
-            }
+            MusicElement::Tuplet(t) => handle_tuplet_data(
+                t,
+                &mut cur_measure,
+                &mut cur_tuplet_info,
+                &mut cur_t_modification,
+            ),
         }
     }
     let item = ScorePartWise {

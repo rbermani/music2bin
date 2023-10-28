@@ -2,7 +2,7 @@ use crate::bin_encoder::MusicEncoder;
 use crate::error::Result;
 use crate::notation::*;
 
-use log::{error, info, trace};
+use log::{debug, error, info};
 use num_traits::FromPrimitive;
 use roxmltree::*;
 use std::collections::BTreeSet;
@@ -12,7 +12,7 @@ use std::io::BufWriter;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-const MAX_SUPPORTED_VOICES: usize = 4;
+const MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS: usize = 2;
 
 fn handle_backup_tag(measure_element: &Node<'_, '_>, measure_checker: &mut MeasureChecker) {
     let duration_tag = measure_element
@@ -94,24 +94,16 @@ fn handle_note_tag(
         .parse::<u8>()
         .expect("Unable to parse voices string");
     voices.insert(voice_num);
+    let voice_idx = voices.iter().position(|&x| x == voice_num).unwrap();
 
-    let mut skip_note: bool = false;
-    // Convert the arbitrary 4 voice max numbering to a normalized 1-4 voice numbering in the binary format
-    for (idx, voice) in voices.clone().iter().enumerate() {
-        if voice_num == *voice {
-            if (idx as usize) > (MAX_SUPPORTED_VOICES - 1) {
-                skip_note = true;
-                break;
-            } else {
-                note_data.voice = FromPrimitive::from_u8((idx) as u8)
-                    .expect("Unable to FromPrimitive on u8 to voice type.");
-            }
-        }
-    }
-
-    if skip_note {
-        println!("skip_note_case");
+    if voice_idx > MeasureChecker::MAX_SUPPORTED_VOICES - 1 {
+        info!("Too many voices case, skipping notes");
+        // Don't let the number of voices in the voices set exceed the maximum
+        voices.remove(&voice_num);
         return;
+    } else {
+        note_data.voice = FromPrimitive::from_u8((voice_idx) as u8)
+            .expect("Unable to FromPrimitive on u8 to voice type.");
     }
 
     let mut time_mod_value: Option<TimeModification> = None;
@@ -144,11 +136,19 @@ fn handle_note_tag(
     }
     match notations_tag {
         Some(n) => {
-            let tuplet_tag = n.children().find(|n| n.has_tag_name("tuplet"));
+            let tuplet_tags = n.children().filter(|n| n.has_tag_name("tuplet"));
             let tied_tag = n.children().find(|n| n.has_tag_name("tied"));
             let slur_tag = n.children().find(|n| n.has_tag_name("slur"));
             let arp_tag = n.children().find(|n| n.has_tag_name("arpeggiate"));
             let artic_tag = n.children().find(|n| n.has_tag_name("articulations"));
+
+            let num_tuplets = tuplet_tags.clone().count();
+            if num_tuplets > MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS {
+                panic!(
+                    "Maximum number of supported tuplet tags {} was exceeded by {}",
+                    MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS, num_tuplets,
+                )
+            }
 
             note_data.ties = match tied_tag {
                 Some(t) => NoteConnection::from_str(t.attribute("type").unwrap())
@@ -194,34 +194,31 @@ fn handle_note_tag(
             // if tuplet_tag.is_none() {
             //     println!("No Tuple Case: measure {measure_idx}");
             // }
-
-            match tuplet_tag {
-                Some(t) => match t.attribute("type").unwrap() {
-                    "start" => {
-                        measure_checker.push_elem(MusicElement::Tuplet(TupletData {
-                            start_stop: TupletStartStop::TupletStart,
-                            tuplet_number: TupletNumber::TupletOne,
-                            actual_notes: time_mod_value.unwrap().get_actual(),
-                            normal_notes: time_mod_value.unwrap().get_normal(),
-                            dotted: false,
-                        }));
+            if num_tuplets > 0 {
+                for t in tuplet_tags {
+                    match t.attribute("type").unwrap() {
+                        "start" => {
+                            measure_checker.push_elem(MusicElement::Tuplet(TupletData {
+                                start_stop: TupletStartStop::TupletStart,
+                                tuplet_number: TupletNumber::TupletOne,
+                                actual_notes: time_mod_value.unwrap().get_actual(),
+                                normal_notes: time_mod_value.unwrap().get_normal(),
+                                dotted: false,
+                            }));
+                        }
+                        "stop" => {
+                            stop_tuplet_elem = Some(MusicElement::Tuplet(TupletData {
+                                start_stop: TupletStartStop::TupletStop,
+                                tuplet_number: TupletNumber::TupletOne,
+                                actual_notes: time_mod_value.unwrap().get_actual(),
+                                normal_notes: time_mod_value.unwrap().get_normal(),
+                                dotted: false,
+                            }));
+                        }
+                        _ => {
+                            panic!("Unhandled tuplet tag attribute case");
+                        }
                     }
-                    "stop" => {
-                        stop_tuplet_elem = Some(MusicElement::Tuplet(TupletData {
-                            start_stop: TupletStartStop::TupletStop,
-                            tuplet_number: TupletNumber::TupletOne,
-                            actual_notes: time_mod_value.unwrap().get_actual(),
-                            normal_notes: time_mod_value.unwrap().get_normal(),
-                            dotted: false,
-                        }));
-                    }
-                    _ => {
-                        panic!("Unhandled tuplet tag attribute case");
-                    }
-                },
-                None => {
-                    if measure_checker.measure_idx() == 27 {}
-                    ()
                 }
             }
         }
@@ -292,7 +289,7 @@ fn handle_note_tag(
     }
 }
 
-pub fn process_xml_to_bin(input: PathBuf, output: PathBuf, dump_output: bool) -> Result<()> {
+pub fn process_xml_to_bin(input: PathBuf, output: PathBuf, dump_input: bool) -> Result<()> {
     let outfile = File::create(output).expect("IO Error Occurred");
 
     let mut complete_music: Vec<MusicElement> = Vec::new();
@@ -313,7 +310,9 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf, dump_output: bool) ->
     let mut voices = BTreeSet::new();
 
     for (measure_idx, measure) in measures.enumerate() {
-        println!("Measure_idx {measure_idx} start");
+        if dump_input {
+            debug!("Measure_idx {measure_idx} start");
+        }
         //let mut inserted_note_tally = 0;
         let mut measure_init = prev_measure_init;
         let mut measure_meta_start = MeasureMetaData::new(MeasureStartEnd::MeasureStart);
@@ -433,22 +432,21 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf, dump_output: bool) ->
                 dynamic_value = handle_direction_tag(&measure_element);
             } else if measure_element.tag_name().name() == "backup" {
                 handle_backup_tag(&measure_element, &mut measure_checker);
-                println!("");
             }
         }
-        println!("");
-        //measure_checker.remove_incomplete_voices(&voices);
+        measure_checker.remove_incomplete_voices(&voices);
         complete_music.append(measure_checker.as_inner());
         complete_music.push(MusicElement::MeasureMeta(measure_meta_end));
     }
 
     let voice_cnt;
-    if voices.len() > MAX_SUPPORTED_VOICES {
+    if voices.len() > MeasureChecker::MAX_SUPPORTED_VOICES {
         info!(
-            "Maximum supported voices is {MAX_SUPPORTED_VOICES} but piece contains {}. Threw away additional voices",
-            voices.len()
+            "Maximum supported voices is {} but piece contains {}. Threw away additional voices",
+            MeasureChecker::MAX_SUPPORTED_VOICES,
+            voices.len(),
         );
-        voice_cnt = MAX_SUPPORTED_VOICES;
+        voice_cnt = MeasureChecker::MAX_SUPPORTED_VOICES;
     } else {
         voice_cnt = voices.len();
     }
@@ -462,8 +460,8 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf, dump_output: bool) ->
     let mut music_encoder = MusicEncoder::new(BufWriter::new(outfile));
     // Encode the musical composition into binary format
     for element in complete_music {
-        if dump_output {
-            trace!("{:?}", element);
+        if dump_input {
+            debug!("{:?}", element);
         }
         match element {
             MusicElement::MeasureInit(m) => {

@@ -1,6 +1,6 @@
 use crate::error::{Error, Result};
 use crate::music_xml_types::TimeModificationElement;
-use log::{error, info, trace};
+use log::{debug, error, info, trace};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use std::collections::BTreeSet;
@@ -18,7 +18,7 @@ pub struct MeasureChecker {
 }
 
 impl MeasureChecker {
-    const MAX_SUPPORTED_VOICES: usize = 4;
+    pub const MAX_SUPPORTED_VOICES: usize = 4;
     pub fn new(
         quarter_division: u32,
         measure_init: &MeasureInitializer,
@@ -35,6 +35,7 @@ impl MeasureChecker {
     }
 
     pub fn push_elem(&mut self, elem: MusicElement) {
+        //debug!("{:?}", elem);
         self.measure.push(elem);
         self.elems_since_backup += 1;
     }
@@ -53,7 +54,7 @@ impl MeasureChecker {
         // time modifying elements
         let last_backup_idx = self.measure.len() - self.elems_since_backup;
         let mut time_mod: Option<TimeModification> = None;
-        let mut current_voice= Voice::One;
+        let mut current_voice = Voice::One;
         let duration_since_backup: usize = self.measure[last_backup_idx..]
             .iter()
             .cloned()
@@ -100,9 +101,12 @@ impl MeasureChecker {
                 NoteData::from_numeric_duration(discrepancy as u32, self.quarter_division)
             {
                 // The new rest should begin on the next voice after the current one.
-                self.measure.push(
-                    MusicElement::NoteRest(NoteData::new_default_rest(duration, is_dotted, current_voice.next())),
-                );
+                self.measure
+                    .push(MusicElement::NoteRest(NoteData::new_default_rest(
+                        duration,
+                        is_dotted,
+                        current_voice.next(),
+                    )));
             } else {
                 panic!(
                     "Could not convert {} in a rest duration value.",
@@ -110,7 +114,10 @@ impl MeasureChecker {
                 );
             }
         } else if backup_duration > duration_since_backup {
-            info!("Backup_duration {} was > duration_since_backup {} Assuming beginning of measure", backup_duration, duration_since_backup);
+            info!(
+                "Backup_duration {} was > duration_since_backup {} Assuming beginning of measure",
+                backup_duration, duration_since_backup
+            );
         }
         self.clear_elems_since_backup();
     }
@@ -123,70 +130,102 @@ impl MeasureChecker {
         &mut self.measure
     }
 
-    // pub fn remove_incomplete_voices(&mut self, voices: &BTreeSet<u8>) {
-    //     let printout = self.measure_idx == 27;
-    //     let mut voice_durations: [u32; Self::MAX_SUPPORTED_VOICES] =
-    //         [0; Self::MAX_SUPPORTED_VOICES];
+    pub fn remove_incomplete_voices(&mut self, voices: &BTreeSet<u8>) {
+        let mut voice_durations: [u32; Self::MAX_SUPPORTED_VOICES] =
+            [0; Self::MAX_SUPPORTED_VOICES];
+        let mut voice_last_idx: [usize; Self::MAX_SUPPORTED_VOICES] =
+            [0; Self::MAX_SUPPORTED_VOICES];
 
-    //     let mut cur_tuplet_info: Option<TupletData> = None;
+        let mut time_mod: Option<TimeModification> = None;
+        let mut prev_voice = 0;
+        // TODO: enumerate the iterator and create mapping of the last element of each voice
+        // so a rest can be inserted at that location later if the voice duration is insufficient
+        for (idx, elem) in self.measure.iter().cloned().enumerate() {
+            match elem {
+                MusicElement::Tuplet(t) => match t.start_stop {
+                    TupletStartStop::TupletStart => {
+                        time_mod = Some(TimeModification::new(t.actual_notes, t.normal_notes));
+                    }
+                    TupletStartStop::TupletNone => {
+                        time_mod = None;
+                    }
+                    TupletStartStop::TupletStop => {
+                        time_mod = None;
+                    }
+                },
+                MusicElement::NoteRest(n) => {
+                    // Do not include chord notes or grace notes in the count, as they do not impact measure duration
+                    if n.chord == Chord::NoChord && n.special_note == SpecialNote::None {
+                        voice_durations[n.voice as usize] += n.get_duration_numeric(self.quarter_division, u32::from(self.beats), u32::from(self.beat_type), time_mod)
+                        // if time_mod.is_none() {
+                            // voice_durations[n.voice as usize] += n.get_duration_in_midi_ticks();
+                            // if self.measure_idx == 39 {
+                            //     println!(
+                            //         "V{}duration: {}",
+                            //         n.voice as usize, voice_durations[n.voice as usize]
+                            //     );
+                            // }
+                        // } else {
+                        //     voice_durations[n.voice as usize] += n.get_duration_in_midi_ticks()
+                        //         * time_mod.unwrap().normal_notes as u32
+                        //         / time_mod.unwrap().actual_notes as u32;
 
-    //     for elem in self.measure.iter().cloned() {
-    //         match elem {
-    //             MusicElement::Tuplet(t) => match t.start_stop {
-    //                 TupletStartStop::TupletStart => {
-    //                     if printout {
-    //                         // println!("TupletStart");
-    //                     }
-    //                     cur_tuplet_info = Some(t);
-    //                 }
-    //                 TupletStartStop::TupletNone => {
-    //                     if printout {
-    //                         // println!("TupletNone");
-    //                     }
-    //                     cur_tuplet_info = None;
-    //                 }
-    //                 TupletStartStop::TupletStop => {
-    //                     if printout {
-    //                         // println!("TupletStop");
-    //                     }
-    //                     cur_tuplet_info = None;
-    //                 }
-    //             },
-    //             MusicElement::NoteRest(n) => {
-    //                 // Do not include chord notes or grace notes in the count, as they do not impact measure duration
-    //                 if n.chord == Chord::NoChord && n.special_note == SpecialNote::None {
-    //                     if cur_tuplet_info.is_none() {
-    //                         voice_durations[n.voice as usize] += n.get_duration_in_midi_ticks();
-    //                     } else {
-    //                         voice_durations[n.voice as usize] += n.get_duration_in_midi_ticks()
-    //                             * cur_tuplet_info.unwrap().normal_notes as u32
-    //                             / cur_tuplet_info.unwrap().actual_notes as u32;
-    //                     }
-    //                     if printout {
-    //                         // println!(
-    //                         //     "{:?} note: {:?} voice {}",
-    //                         //     n.note_type, n.note_rest, n.voice as usize
-    //                         // );
-    //                     }
-    //                 }
-    //             }
-    //             _ => {
-    //                 error!("Unhandled element case");
-    //             }
-    //         }
-    //     }
+                            // if self.measure_idx == 39 {
+                            //     println!(
+                            //         "V{}modduration: {}",
+                            //         n.voice as usize, voice_durations[n.voice as usize]
+                            //     );
+                            // }
+                        // }
+                        // if printout {
+                        // println!(
+                        //     "{:?} note: {:?} voice {}",
+                        //     n.note_type, n.note_rest, n.voice as usize
+                        // );
+                        // }
+                    }
+                    if n.voice as usize > prev_voice {
+                        voice_last_idx[n.voice as usize] = idx - 1;
+                    }
+                    prev_voice = n.voice as usize;
+                }
+                _ => {
+                    error!("Unhandled element case");
+                }
+            }
+        }
 
-    //     let first_voice_duration = voice_durations[0];
-
-    //     for (voice_idx, _) in voices.iter().enumerate() {
-    //         if voice_durations[voice_idx] != first_voice_duration {
-    //             // println!(
-    //             //     "M{measure_idx} Voice Zero: {first_voice_duration} duration Voice {voice_idx}: {} duration",
-    //             //     voice_durations[voice_idx]
-    //             // );
-    //         }
-    //     }
-    // }
+        let first_voice_duration = voice_durations[0];
+        for (voice_idx, _) in voices.iter().enumerate() {
+            if voice_durations[voice_idx] != 0 && voice_durations[voice_idx] < first_voice_duration
+            {
+                let discrepancy = first_voice_duration - voice_durations[voice_idx];
+                println!(
+                    "M{} Voice Zero: {first_voice_duration} duration Voice {voice_idx}: {} duration {} discrepancy", self.measure_idx,
+                    voice_durations[voice_idx],discrepancy
+                );
+                // insert rest of discrepancy length at index at measure[voice_last_idx[voice_idx]]
+                if let Some((duration, is_dotted)) =
+                    NoteData::from_numeric_duration(discrepancy, self.quarter_division)
+                {
+                    // The new rest should begin on the next voice after the current one.
+                    self.measure.insert(
+                        voice_last_idx[voice_idx],
+                        MusicElement::NoteRest(NoteData::new_default_rest(
+                            duration,
+                            is_dotted,
+                            FromPrimitive::from_u8(voice_idx as u8).unwrap(),
+                        )),
+                    );
+                } else {
+                    panic!(
+                        "Could not convert {} in a rest duration value.",
+                        discrepancy
+                    );
+                }
+            }
+        }
+    }
 }
 
 struct DivisionsVec {
@@ -1369,7 +1408,7 @@ impl NoteData {
     ) -> Option<(NoteType, IsDotted)> {
         let is_dotted = |standard_duration: u32| {
             if (standard_duration * 3) % 2 != 0 {
-                panic!("Invalid {standard_duration}");
+                panic!("Could not determine is_dotted. num_duration: {} std_duration {standard_duration} * 3 is not evenly divisible by 2",numeric_duration);
             }
             numeric_duration == standard_duration * 3 / 2
         };

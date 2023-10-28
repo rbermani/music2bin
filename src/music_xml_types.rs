@@ -52,7 +52,7 @@ pub struct ClefElement {
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
-pub enum MXmlDynamics {
+pub enum DynamicsValue {
     Ppp,
     Pp,
     P,
@@ -66,19 +66,19 @@ pub enum MXmlDynamics {
     N,
 }
 
-impl MXmlDynamics {
-    pub fn from_dynamics(dynamics: PhraseDynamics) -> Option<MXmlDynamics> {
+impl DynamicsValue {
+    pub fn from_dynamics(dynamics: PhraseDynamics) -> Option<DynamicsValue> {
         match dynamics {
             PhraseDynamics::None => None,
-            PhraseDynamics::Pianississimo => Some(MXmlDynamics::Ppp),
-            PhraseDynamics::Pianissimo => Some(MXmlDynamics::Pp),
-            PhraseDynamics::Piano => Some(MXmlDynamics::P),
-            PhraseDynamics::Forte => Some(MXmlDynamics::F),
-            PhraseDynamics::Fortissimo => Some(MXmlDynamics::Ff),
-            PhraseDynamics::Fortississimo => Some(MXmlDynamics::Fff),
-            PhraseDynamics::MezzoPiano => Some(MXmlDynamics::Mp),
-            PhraseDynamics::MezzoForte => Some(MXmlDynamics::Mf),
-            _ => Some(MXmlDynamics::P),
+            PhraseDynamics::Pianississimo => Some(DynamicsValue::Ppp),
+            PhraseDynamics::Pianissimo => Some(DynamicsValue::Pp),
+            PhraseDynamics::Piano => Some(DynamicsValue::P),
+            PhraseDynamics::Forte => Some(DynamicsValue::F),
+            PhraseDynamics::Fortissimo => Some(DynamicsValue::Ff),
+            PhraseDynamics::Fortississimo => Some(DynamicsValue::Fff),
+            PhraseDynamics::MezzoPiano => Some(DynamicsValue::Mp),
+            PhraseDynamics::MezzoForte => Some(DynamicsValue::Mf),
+            _ => Some(DynamicsValue::P),
         }
     }
 }
@@ -87,7 +87,7 @@ impl MXmlDynamics {
 #[serde(rename_all = "kebab-case")]
 pub struct DynamicsElement {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dynamics: Option<MXmlDynamics>,
+    pub dynamics: Option<DynamicsValue>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -158,7 +158,11 @@ pub enum TupletType {
     #[default]
     Start,
     Stop,
+    None,
 }
+
+pub type SlurType = TupletType;
+pub type TiedType = TupletType;
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -173,14 +177,14 @@ pub struct TupletElement {
 #[serde(rename_all = "kebab-case")]
 pub struct TiedElement {
     #[serde(rename(serialize = "@type"))]
-    pub r#type: TupletType,
+    pub r#type: TiedType,
 }
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub struct SlurElement {
     #[serde(rename(serialize = "@type"))]
-    pub r#type: TupletType,
+    pub r#type: SlurType,
     #[serde(rename(serialize = "@number"))]
     pub number: String,
 }
@@ -324,6 +328,27 @@ impl NoteElement {
             staff: Self::get_staff(note.voice, num_voices),
             notations: notations,
         }
+    }
+
+    pub fn insert_stop_tuple(&mut self, tuplet_number: String) {
+        if self.notations.is_some() {
+            let ne = self.notations.as_mut().unwrap();
+            ne.notations.push(Notations::Tuplet(TupletElement {
+                r#type: TupletType::Stop,
+                number: tuplet_number,
+            }));
+        } else {
+            self.notations = Some(NotationsElement {
+                notations: vec![Notations::Tuplet(TupletElement {
+                    r#type: TupletType::Stop,
+                    number: tuplet_number,
+                })],
+            });
+        }
+    }
+
+    pub fn clear_time_mods(&mut self) {
+        self.time_modification = None;
     }
 
     pub fn get_staff(voice: Voice, num_voices: usize) -> String {
