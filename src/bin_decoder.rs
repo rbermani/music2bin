@@ -303,11 +303,16 @@ impl MusicDecoder {
 #[cfg(test)]
 mod tests {
     use super::MusicDecoder;
+    use crate::bin_encoder::*;
     use crate::notation::*;
+    use std::io::BufWriter;
+    use std::path::PathBuf;
+    use std::fs::File;
+
     #[test]
     fn test_music_note_data_rest_parse() {
         let mut music_dec = MusicDecoder::new(None);
-        let note_rest_data: &[u8] = &[0x50, 0x42, 0x80, 0x00];
+        let note_rest_data: &[u8] = &[0xa0, 0xef, 0x84, 0x01];
         music_dec.raw_read(note_rest_data);
         let elems = music_dec.parse_data();
         assert!(elems.is_ok());
@@ -316,18 +321,18 @@ mod tests {
             elems.unwrap().get(0),
             Some(&MusicElement::NoteRest(NoteData {
                 note_rest: NoteRestValue::new_from_numeric(65),
-                phrase_dynamics: PhraseDynamics::None,
-                note_type: NoteType::Crochet,
-                dotted: false,
+                phrase_dynamics: PhraseDynamics::Forte,
+                note_type: NoteType::SemiBreve,
+                dotted: true,
                 arpeggiate: Arpeggiate::NoArpeggiation,
                 special_note: SpecialNote::None,
-                articulation: Articulation::None,
+                articulation: Articulation::Marcato,
                 trill: Trill::None,
                 ties: NoteConnection::NoTie,
                 stress: Stress::NotAccented,
                 chord: Chord::NoChord,
                 slur: SlurConnection::NoSlur,
-                voice: Voice::One,
+                voice: Voice::Two,
             }))
         );
 
@@ -336,7 +341,7 @@ mod tests {
     #[test]
     fn test_music_meta_parse() {
         let mut music_dec = MusicDecoder::new(None);
-        let measure_meta_data: &[u8] = &[0x20, 0x00, 0x00, 0x00];
+        let measure_meta_data: &[u8] = &[0x4e, 0x00, 0x00, 0x00];
         music_dec.raw_read(measure_meta_data);
         let elems = music_dec.parse_data();
         assert!(elems.is_ok());
@@ -345,38 +350,58 @@ mod tests {
             elems.unwrap().get(0),
             Some(&MusicElement::MeasureMeta(MeasureMetaData {
                 start_end: MeasureStartEnd::MeasureStart,
-                ending: Ending::None,
-                dal_segno: DalSegno::None
+                ending: Ending::Three,
+                dal_segno: DalSegno::DaCapo
             }))
         );
         // TODO: Add negative cases that fail
     }
+    /// This function is just used for dumping serialized data structures to file to
+    /// use for validation test data generation. Can be left commented out
+    // #[test]
+    // fn test_dump_bin_file() {
+    //     let outfile = File::create(PathBuf::from("validation.bin")).expect("IO Error Occurred");
+    //     let writer = BufWriter::new(BufWriter::new(outfile));
+    //     let mut validation = MusicEncoder::new(writer);
+    //     validation.insert_note_data(NoteData {
+    //         note_rest: NoteRestValue::new_from_numeric(65),
+    //         phrase_dynamics: PhraseDynamics::Forte,
+    //         note_type: NoteType::SemiBreve,
+    //         dotted: true,
+    //         arpeggiate: Arpeggiate::NoArpeggiation,
+    //         special_note: SpecialNote::None,
+    //         articulation: Articulation::Marcato,
+    //         trill: Trill::None,
+    //         ties: NoteConnection::NoTie,
+    //         stress: Stress::NotAccented,
+    //         chord: Chord::NoChord,
+    //         slur: SlurConnection::NoSlur,
+    //         voice: Voice::Two,
+    //     }).unwrap();
+
+    //     validation.flush();
+    // }
     #[test]
     fn test_music_init_parse() {
         let mut music_dec = MusicDecoder::new(None);
 
         // Positive case examples
-        let music_init_data: &[u8] = &[0x09, 0x01, 0x76, 0x40];
+        let music_init_data: &[u8] = &[0x12, 0x0c, 0x80, 0x00];
         music_dec.raw_read(music_init_data);
 
         let elems = music_dec.parse_data();
-
         assert!(elems.is_ok());
-
         assert_eq!(
             elems.unwrap().get(0),
             Some(&MusicElement::MeasureInit(MeasureInitializer {
                 beats: Beats::Four,
                 beat_type: BeatType::Four,
                 key_sig: KeySignature::CMajorAminor,
-                treble_dynamics: Dynamics::Pianissimo,
-                bass_dynamics: Dynamics::Fortississimo,
                 tempo: Tempo::default(),
             }))
         );
 
         //music_dec.clear_data();
-
         // TODO: Add negative cases that fail
     }
 }
