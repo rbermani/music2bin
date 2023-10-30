@@ -11,9 +11,9 @@ macro_rules! function {
 }
 
 #[cfg(windows)]
-pub const NL: &'static str = "\r\n";
+pub const NL: &str = "\r\n";
 #[cfg(not(windows))]
-pub const NL: &'static str = "\n";
+pub const NL: &str = "\n";
 
 pub mod into_option {
     pub trait IntoOption<T> {

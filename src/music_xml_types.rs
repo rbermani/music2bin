@@ -189,13 +189,33 @@ pub struct SlurElement {
     pub number: String,
 }
 
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArticulationValue {
+    #[default]
+    None,
+    Accent,
+    StrongAccent,
+    Stacatto,
+    Staccatissimo,
+    Tenuto,
+    DetachedLegato,
+    Stress,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ArticulationElement {
+    pub articulations: ArticulationValue,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Notations {
     Tied(TiedElement),
     Slur(SlurElement),
     Tuplet(TupletElement),
-    Articulations,
+    Articulations(ArticulationElement),
     Dynamics,
     Fermata,
     Arpeggiate,
@@ -216,35 +236,33 @@ pub enum PitchRest {
 impl From<NoteRestValue> for PitchRest {
     fn from(note_data: NoteRestValue) -> PitchRest {
         if note_data.get_numeric_value() == 0 {
-            return PitchRest::Rest;
-        } else {
-            if let Some((step, alter, octave)) = note_data.decode_composite_note() {
-                // TODO: Make this logic for processing alter string more terse
-                if alter == Alter::None {
-                    return PitchRest::Pitch(PitchElement {
-                        step: step.to_string(),
-                        octave: octave as i8,
-                        alter: None,
-                    });
-                } else {
-                    return PitchRest::Pitch(PitchElement {
-                        step: step.to_string(),
-                        octave: octave as i8,
-                        alter: Some(alter.to_string()),
-                    });
-                }
+            PitchRest::Rest
+        } else if let Some((step, alter, octave)) = note_data.decode_composite_note() {
+            // TODO: Make this logic for processing alter string more terse
+            if alter == Alter::None {
+                return PitchRest::Pitch(PitchElement {
+                    step: step.to_string(),
+                    octave: octave as i8,
+                    alter: None,
+                });
             } else {
-                panic!("Decode composite note failed");
+                return PitchRest::Pitch(PitchElement {
+                    step: step.to_string(),
+                    octave: octave as i8,
+                    alter: Some(alter.to_string()),
+                });
             }
+        } else {
+            panic!("Decode composite note failed");
         }
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub struct TimeModificationElement {
-    pub actual_notes: u8,
-    pub normal_notes: u8,
+    pub actual_notes: String,
+    pub normal_notes: String,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -312,7 +330,7 @@ impl NoteElement {
                     divisions,
                     u32::from(beats),
                     u32::from(beat_type),
-                    t_modification.map(|v| TimeModification::from(v)),
+                    t_modification.as_ref().map(TimeModification::from),
                 ))
             } else {
                 None
@@ -326,7 +344,7 @@ impl NoteElement {
             r#type: note.note_type.get_type_string(),
             time_modification: t_modification,
             staff: Self::get_staff(note.voice, num_voices),
-            notations: notations,
+            notations,
         }
     }
 
@@ -354,16 +372,14 @@ impl NoteElement {
     pub fn get_staff(voice: Voice, num_voices: usize) -> String {
         if num_voices < 3 {
             if voice == Voice::One {
-                return 1.to_string();
+                1.to_string()
             } else {
-                return 2.to_string();
+                2.to_string()
             }
+        } else if voice == Voice::One || voice == Voice::Two {
+            1.to_string()
         } else {
-            if voice == Voice::One || voice == Voice::Two {
-                return 1.to_string();
-            } else {
-                return 2.to_string();
-            }
+            2.to_string()
         }
     }
 }

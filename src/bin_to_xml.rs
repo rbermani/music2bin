@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use crate::bin_decoder::MusicDecoder;
 use crate::error::{Error, Result};
 use crate::utils::NL;
@@ -10,6 +12,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::path::PathBuf;
+
 const MAX_SUPPORTED_VOICES: usize = 4;
 
 fn handle_measure_init(
@@ -70,6 +73,7 @@ fn handle_measure_meta(
 ) {
     match e.start_end {
         MeasureStartEnd::MeasureStart => {
+            //println!("measure_idx: {}", cur_measure_idx);
             *prev_voice = None;
             *measure_duration_tally = 0;
             m.number = cur_measure_idx.to_string();
@@ -99,20 +103,18 @@ fn handle_measure_meta(
             *prev_voice = None;
             *measure_duration_tally = 0;
             m.number = cur_measure_idx.to_string();
-            if !e.ending.to_string().is_empty() {
-                m.direction_note
-                    .push(MeasureDirectionNote::Barline(BarlineElement {
-                        location: Some("left".to_string()),
-                        ending: (!e.ending.to_string().is_empty()).then(|| EndingElement {
-                            number: Some(e.ending.to_string()),
-                            r#type: Some("start".to_string()),
-                            value: Some(e.ending.to_string()),
-                        }),
-                        repeat: Some(RepeatElement {
-                            direction: Some("forward".to_string()),
-                        }),
-                    }));
-            }
+            m.direction_note
+                .push(MeasureDirectionNote::Barline(BarlineElement {
+                    location: Some("left".to_string()),
+                    ending: (!e.ending.to_string().is_empty()).then(|| EndingElement {
+                        number: Some(e.ending.to_string()),
+                        r#type: Some("start".to_string()),
+                        value: Some(e.ending.to_string()),
+                    }),
+                    repeat: Some(RepeatElement {
+                        direction: Some("forward".to_string()),
+                    }),
+                }));
         }
         MeasureStartEnd::RepeatEnd => {
             m.direction_note
@@ -150,8 +152,8 @@ fn handle_note_rest(
     // Build the notations Vec here
     let mut notations = None;
     let mut notations_elems = vec![];
-    if cur_tuplet_info.is_some() {
-        let te = cur_tuplet_info.clone().unwrap();
+    if let Some(val) = cur_tuplet_info {
+        let te = val.clone();
         match te.r#type {
             TupletType::Stop => {
                 panic!("Incorrectly formatted data. Tuplet Start should be handled elsewhere.")
@@ -189,12 +191,13 @@ fn handle_note_rest(
                 }));
         }
     }
+
     if e.special_note == SpecialNote::None {
         *measure_duration_tally += e.get_duration_numeric(
             divisions,
             u32::from(cur_beat),
             u32::from(cur_beat_type),
-            cur_t_modification.map(|v| TimeModification::from(v)),
+            cur_t_modification.as_ref().map(TimeModification::from),
         );
     }
 
@@ -207,13 +210,19 @@ fn handle_note_rest(
                 r#type: TiedType::Stop,
             }));
         }
-        NoteConnection::NoTie => {}
+        NoteConnection::None => {}
         NoteConnection::StartTie => {
             notations_elems.push(Notations::Tied(TiedElement {
                 r#type: TiedType::Start,
             }));
         }
     }
+
+    if e.articulation.ne(&Articulation::None) {
+        //println!("Articulation: {}", e.articulation.to_string());
+        notations_elems.push(Notations::Articulations(ArticulationElement { articulations: e.articulation.into() }))
+    }
+
     match e.slur {
         SlurConnection::EndSlur => {
             notations_elems.push(Notations::Slur(SlurElement {
@@ -221,7 +230,7 @@ fn handle_note_rest(
                 number: "1".to_string(),
             }));
         }
-        SlurConnection::NoSlur => {}
+        SlurConnection::None => {}
         SlurConnection::StartSlur => {
             notations_elems.push(Notations::Slur(SlurElement {
                 r#type: SlurType::Start,
@@ -235,18 +244,18 @@ fn handle_note_rest(
             notations: notations_elems,
         });
     }
+
     m.direction_note
         .push(MeasureDirectionNote::Note(NoteElement::new(
             e,
             divisions,
             cur_beat,
             cur_beat_type,
-            *cur_t_modification,
+            cur_t_modification.as_ref().cloned(),
             notations,
             num_voices,
         )));
     *prev_voice = Some(e.voice);
-    //prev_clef = Some(e.treble_bass);
 }
 
 fn handle_tuplet_data(
@@ -255,43 +264,24 @@ fn handle_tuplet_data(
     cur_tuplet_info: &mut Option<TupletElement>,
     cur_t_modification: &mut Option<TimeModificationElement>,
 ) {
-    match t.start_stop {
-        TupletStartStop::TupletStart => {
-            *cur_t_modification = Some(TimeModificationElement {
-                actual_notes: t.actual_notes,
-                normal_notes: t.normal_notes,
-            });
-            *cur_tuplet_info = Some(TupletElement {
-                r#type: TupletType::Start,
-                number: match t.tuplet_number {
-                    TupletNumber::TupletOne => "1".to_string(),
-                    TupletNumber::TupletTwo => "2".to_string(),
-                },
-            });
-        }
-        TupletStartStop::TupletNone => {
-            *cur_tuplet_info = None;
-        }
-        TupletStartStop::TupletStop => {
-            // Since Tuplet stop elements must come after the NoteData elements they encapsulate, but
-            // MusicXML tracks the Stop Tuplet event as part of the Note tag,
-            // we must search backwards through the measure to find the most
-            // recent NoteData element and insert the TupletStop information there.
-            for elem in m.direction_note.iter_mut().rev() {
-                match elem {
-                    MeasureDirectionNote::Note(ne) => {
-                        // First extract the current tuplet tracking number, which must be populated if we are getting a TupletStop
-                        let tuplet_number = cur_tuplet_info.clone().unwrap().number;
-                        ne.insert_stop_tuple(tuplet_number);
-                        break;
-                    }
-                    _ => (),
-                }
+    *cur_t_modification = t.into();
+    if t.start_stop == TupletStartStop::TupletStop {
+        // Since Tuplet stop elements must come after the NoteData elements they encapsulate, but
+        // MusicXML tracks the Stop Tuplet event as part of the Note tag,
+        // we must search backwards through the measure to find the most
+        // recent NoteData element and insert the TupletStop information there.
+        for elem in m.direction_note.iter_mut().rev() {
+            if let MeasureDirectionNote::Note(ne) = elem {
+                // First extract the current tuplet tracking number, which must be populated if we are getting a TupletStop
+                let tuplet_number = cur_tuplet_info.clone().unwrap().number;
+                ne.insert_stop_tuple(tuplet_number);
+                break;
             }
-            *cur_tuplet_info = None;
-            *cur_t_modification = None;
         }
     }
+
+    // This must come last due to non-commutive property of state change
+    *cur_tuplet_info = t.into();
 }
 
 fn serialize_xml(music: Vec<MusicElement>, divisions: u32, num_voices: usize) -> String {
@@ -333,7 +323,7 @@ fn serialize_xml(music: Vec<MusicElement>, divisions: u32, num_voices: usize) ->
                 &mut prev_voice,
                 &mut measure_duration_tally,
                 &mut cur_tuplet_info,
-                &mut cur_t_modification,
+                &cur_t_modification,
                 cur_beat,
                 cur_beat_type,
                 num_voices,
@@ -396,14 +386,14 @@ pub fn process_bin_to_xml(input: PathBuf, output: PathBuf, dump_input: bool) -> 
     let mut music_decoder = MusicDecoder::new(Some(reader));
     music_decoder.reader_read()?;
 
-    let parsed = music_decoder.parse_data()?;
+    let parsed_elems = music_decoder.parse_data()?;
 
     // For tuplets, the associated note type is embedded in the NoteData type. The Tuplet data information element
     // precedes the note data element, so to determine the shortest value represented in the piece, both the tuplet information
     // is needed and all of the notes within the tuplet section. For the minimum, we're looking for the shortest note type
     // that is within a tuplet, and the most actual notes within the number of normal notes indicated in the Tuplet data
     // and finding a LCM (least common multiple) for them
-    let (divisions, voice_len) = calc_divisions_voices(parsed, dump_input);
+    let (divisions, voice_len) = calc_divisions_voices(parsed_elems, dump_input);
 
     if voice_len > MAX_SUPPORTED_VOICES {
         error!(
@@ -414,7 +404,8 @@ pub fn process_bin_to_xml(input: PathBuf, output: PathBuf, dump_input: bool) -> 
     }
 
     debug!("Divisions is {divisions}. Voices is {}", voice_len);
-    let output = serialize_xml(music_decoder.parse_data()?, divisions, voice_len);
+    let music_elems = music_decoder.parse_data()?;
+    let output = serialize_xml(music_elems, divisions, voice_len);
     outfile
         .write_all(output.as_bytes())
         .expect("IO Error occurred on write_all()");

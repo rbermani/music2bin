@@ -1,8 +1,9 @@
+use crate::bin_encoder;
 use crate::bin_encoder::MusicEncoder;
 use crate::error::Result;
 use crate::notation::*;
 
-use log::{debug, error, info};
+use log::{debug, info, warn};
 use num_traits::FromPrimitive;
 use roxmltree::*;
 use std::collections::BTreeSet;
@@ -11,8 +12,9 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
 use std::str::FromStr;
+use strum::EnumCount;
 
-const MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS: usize = 2;
+const MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS: usize = TupletNumber::COUNT;
 
 fn handle_backup_tag(measure_element: &Node<'_, '_>, measure_checker: &mut MeasureChecker) {
     let duration_tag = measure_element
@@ -34,15 +36,8 @@ fn handle_direction_tag(measure_element: &Node<'_, '_>) -> Option<PhraseDynamics
         .children()
         .find(|n| n.has_tag_name("dynamics"));
 
-    if dynamics_tag.is_some() {
-        match PhraseDynamics::from_str(
-            dynamics_tag
-                .unwrap()
-                .first_element_child()
-                .unwrap()
-                .tag_name()
-                .name(),
-        ) {
+    if let Some(val) = dynamics_tag {
+        match PhraseDynamics::from_str(val.first_element_child().unwrap().tag_name().name()) {
             Ok(t) => Some(t),
             Err(_) => None,
         }
@@ -73,7 +68,7 @@ fn handle_note_tag(
         None => SpecialNote::None,
     };
 
-    if let Some(_) = dotted {
+    if dotted.is_some() {
         note_data.dotted = true;
     }
 
@@ -96,8 +91,8 @@ fn handle_note_tag(
     voices.insert(voice_num);
     let voice_idx = voices.iter().position(|&x| x == voice_num).unwrap();
 
-    if voice_idx > MeasureChecker::MAX_SUPPORTED_VOICES - 1 {
-        info!("Too many voices case, skipping notes");
+    if voices.len() > MeasureChecker::MAX_SUPPORTED_VOICES {
+        warn!("Too many voices case, skipping notes");
         // Don't let the number of voices in the voices set exceed the maximum
         voices.remove(&voice_num);
         return;
@@ -106,112 +101,83 @@ fn handle_note_tag(
             .expect("Unable to FromPrimitive on u8 to voice type.");
     }
 
-    let mut time_mod_value: Option<TimeModification> = None;
-    match time_mod_tag {
-        Some(n) => {
-            let actual_notes_tag = n.children().find(|n| n.has_tag_name("actual-notes"));
-            let normal_notes_tag = n.children().find(|n| n.has_tag_name("normal-notes"));
-            if actual_notes_tag.is_some() && normal_notes_tag.is_some() {
-                let actual_notes = actual_notes_tag
-                    .unwrap()
-                    .text()
-                    .unwrap()
-                    .parse::<u8>()
-                    .unwrap();
-                let normal_notes = normal_notes_tag
-                    .unwrap()
-                    .text()
-                    .unwrap()
-                    .parse::<u8>()
-                    .unwrap();
-                time_mod_value = Some(TimeModification::new(actual_notes, normal_notes));
-            }
+    let time_mod_value = if let Some(n) = time_mod_tag {
+        let actual_notes_tag = n.children().find(|n| n.has_tag_name("actual-notes"));
+        let normal_notes_tag = n.children().find(|n| n.has_tag_name("normal-notes"));
+        if let (Some(an_tag), Some(nn_tag)) = (actual_notes_tag, normal_notes_tag) {
+            let actual_notes = an_tag.text().unwrap().parse().unwrap();
+            let normal_notes = nn_tag.text().unwrap().parse().unwrap();
+            Some(TimeModification::new(actual_notes, normal_notes))
+        } else {
+            None
         }
-        None => (),
-    }
+    } else {
+        None
+    };
 
     if let Some(phrase_dyn) = dynamic_value {
         note_data.phrase_dynamics = *phrase_dyn;
         *dynamic_value = None;
     }
-    match notations_tag {
-        Some(n) => {
-            let tuplet_tags = n.children().filter(|n| n.has_tag_name("tuplet"));
-            let tied_tag = n.children().find(|n| n.has_tag_name("tied"));
-            let slur_tag = n.children().find(|n| n.has_tag_name("slur"));
-            let arp_tag = n.children().find(|n| n.has_tag_name("arpeggiate"));
-            let artic_tag = n.children().find(|n| n.has_tag_name("articulations"));
+    if let Some(n) = notations_tag {
+        let tuplet_tags = n.children().filter(|n| n.has_tag_name("tuplet"));
+        let tied_tag = n.children().find(|n| n.has_tag_name("tied"));
+        let slur_tag = n.children().find(|n| n.has_tag_name("slur"));
+        let arp_tag = n.children().find(|n| n.has_tag_name("arpeggiate"));
+        let artic_tag = n.children().find(|n| n.has_tag_name("articulations"));
 
-            let num_tuplets = tuplet_tags.clone().count();
-            if num_tuplets > MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS {
-                panic!(
-                    "Maximum number of supported tuplet tags {} was exceeded by {}",
-                    MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS, num_tuplets,
-                )
-            }
+        let num_tuplets = tuplet_tags.clone().count();
+        if num_tuplets > MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS {
+            panic!(
+                "measure_idx: {} Maximum number of supported tuplet tags {} was exceeded by {}",
+                measure_checker.measure_idx(),
+                MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS,
+                num_tuplets,
+            )
+        }
 
-            note_data.ties = match tied_tag {
-                Some(t) => NoteConnection::from_str(t.attribute("type").unwrap())
-                    .expect("Unsupported Tied Type"),
-                None => NoteConnection::NoTie,
-            };
+        note_data.ties = match tied_tag {
+            Some(t) => NoteConnection::from_str(t.attribute("type").unwrap())
+                .expect("Unsupported Tied Type"),
+            None => NoteConnection::None,
+        };
 
-            note_data.arpeggiate = match arp_tag {
-                Some(_t) => Arpeggiate::Arpeggiate,
-                None => Arpeggiate::NoArpeggiation,
-            };
+        note_data.arpeggiate = match arp_tag {
+            Some(_t) => Arpeggiate::Arpeggiate,
+            None => Arpeggiate::NoArpeggiation,
+        };
 
-            let _artic = match artic_tag {
-                Some(t) => {
-                    match t.first_child().unwrap().tag_name().name() {
-                        "staccato" => Articulation::Stacatto,
-                        "strong-accent" => Articulation::Marcato,
-                        "accent" => {
-                            // Stressed beat case, handled outside of Articulation case
-                            note_data.stress = Stress::Accented;
-                            Articulation::None
-                        }
-                        _ => {
-                            // Unsupported articulation tag
-                            Articulation::None
-                        }
-                    }
-                }
-                None => Articulation::None,
-            };
+        note_data.articulation = if let Some(t) = artic_tag {
+            Articulation::from_str(t.first_element_child().unwrap().tag_name().name()).expect("Articulation::from_str method never returns Err")
+        } else {
+            Articulation::None
+        };
 
-            note_data.slur = match slur_tag {
-                Some(t) => SlurConnection::from_str(t.attribute("type").unwrap())
-                    .expect("Unhandled slur tag attribute case"),
-                None => SlurConnection::NoSlur,
-            };
+        note_data.slur = match slur_tag {
+            Some(t) => SlurConnection::from_str(t.attribute("type").unwrap())
+                .expect("Unhandled slur tag attribute case"),
+            None => SlurConnection::None,
+        };
 
-            if note_data.slur.eq(&SlurConnection::StartSlur) {
-                // Legato overrides other articulations, except accents, which are handled independently
-                note_data.articulation = Articulation::Legato;
-            }
-
-            // if tuplet_tag.is_none() {
-            //     println!("No Tuple Case: measure {measure_idx}");
-            // }
-            if num_tuplets > 0 {
+        if num_tuplets > 0 {
+            if let Some(time_mod_value) = time_mod_value {
                 for t in tuplet_tags {
                     match t.attribute("type").unwrap() {
                         "start" => {
                             measure_checker.push_elem(MusicElement::Tuplet(TupletData {
                                 start_stop: TupletStartStop::TupletStart,
-                                tuplet_number: TupletNumber::TupletOne,
-                                actual_notes: time_mod_value.unwrap().get_actual(),
-                                normal_notes: time_mod_value.unwrap().get_normal(),
+                                tuplet_number: TupletNumber::One,
+                                actual_notes: time_mod_value.get_actual(),
+                                normal_notes: time_mod_value.get_normal(),
                                 dotted: false,
                             }));
                         }
                         "stop" => {
                             stop_tuplet_elem = Some(MusicElement::Tuplet(TupletData {
                                 start_stop: TupletStartStop::TupletStop,
-                                tuplet_number: TupletNumber::TupletOne,
-                                actual_notes: time_mod_value.unwrap().get_actual(),
-                                normal_notes: time_mod_value.unwrap().get_normal(),
+                                tuplet_number: TupletNumber::One,
+                                actual_notes: time_mod_value.get_actual(),
+                                normal_notes: time_mod_value.get_normal(),
                                 dotted: false,
                             }));
                         }
@@ -220,9 +186,10 @@ fn handle_note_tag(
                         }
                     }
                 }
+            } else {
+                panic!("time mod value should always be populated if tuplets > 0 ");
             }
         }
-        None => (),
     }
 
     note_data.note_type = if let Some(n) = note_type {
@@ -231,10 +198,13 @@ fn handle_note_tag(
         // Whole rests sometimes provide no "type" tag, but whole rests are different durations
         // depending on the time signature, so we must manually calculate the rhythm value based on duration
         if let Some(n) = xml_note_duration {
-            if let Some((rest_duration, is_dotted)) = NoteData::from_numeric_duration(
+            if let Some((rest_duration, is_dotted, time_mod)) = NoteData::from_numeric_duration(
                 n.text().unwrap().parse::<u32>().unwrap(),
                 measure_checker.quarter_division(),
             ) {
+                if time_mod.is_some() {
+                    warn!("time modification for rest is present, but not being used.")
+                }
                 note_data.dotted = is_dotted;
                 rest_duration
             } else {
@@ -284,8 +254,8 @@ fn handle_note_tag(
 
     // The MeasureChecker checks for correct total duration. Incomplete voices are thrown away.
     measure_checker.push_elem(MusicElement::NoteRest(note_data));
-    if stop_tuplet_elem.is_some() {
-        measure_checker.push_elem(stop_tuplet_elem.unwrap());
+    if let Some(st_elem) = stop_tuplet_elem {
+        measure_checker.push_elem(st_elem);
     }
 }
 
@@ -311,7 +281,7 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf, dump_input: bool) -> 
 
     for (measure_idx, measure) in measures.enumerate() {
         if dump_input {
-            debug!("Measure_idx {measure_idx} start");
+            //debug!("Measure_idx {measure_idx} start");
         }
         //let mut inserted_note_tally = 0;
         let mut measure_init = prev_measure_init;
@@ -326,63 +296,53 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf, dump_input: bool) -> 
             }
         }
 
-        match measure.descendants().find(|n| n.has_tag_name("time")) {
-            Some(t) => {
-                let beats_node = t.children().find(|n| n.has_tag_name("beats")).unwrap();
-                let beat_type_node = t.children().find(|n| n.has_tag_name("beat-type")).unwrap();
+        if let Some(t) = measure.descendants().find(|n| n.has_tag_name("time")) {
+            let beats_node = t.children().find(|n| n.has_tag_name("beats")).unwrap();
+            let beat_type_node = t.children().find(|n| n.has_tag_name("beat-type")).unwrap();
 
-                measure_init.beats = Beats::from_str(beats_node.text().unwrap()).unwrap();
-                measure_init.beat_type =
-                    BeatType::from_str(beat_type_node.text().unwrap()).unwrap();
-            }
-            _ => (),
+            measure_init.beats = Beats::from_str(beats_node.text().unwrap()).unwrap();
+            measure_init.beat_type = BeatType::from_str(beat_type_node.text().unwrap()).unwrap();
         };
 
-        match measure.descendants().find(|n| n.has_tag_name("repeat")) {
-            Some(n) => {
-                let measure_direction_str = n.attribute("direction").unwrap();
-                if measure_direction_str.eq("backward") {
-                    measure_meta_end.start_end = MeasureStartEnd::RepeatEnd;
-                } else if measure_direction_str.eq("forward") {
-                    measure_meta_start.start_end = MeasureStartEnd::RepeatStart;
-                } else {
-                    // Unsupported direction attribute
-                    panic!(
-                        "Encountered unsupported repeat direction attribute: {}",
-                        measure_direction_str
-                    );
-                }
+        if let Some(n) = measure.descendants().find(|n| n.has_tag_name("repeat")) {
+            let measure_direction_str = n.attribute("direction").unwrap();
+            if measure_direction_str.eq("backward") {
+                measure_meta_end.start_end = MeasureStartEnd::RepeatEnd;
+            } else if measure_direction_str.eq("forward") {
+                measure_meta_start.start_end = MeasureStartEnd::RepeatStart;
+            } else {
+                // Unsupported direction attribute
+                panic!(
+                    "Encountered unsupported repeat direction attribute: {}",
+                    measure_direction_str
+                );
             }
-            _ => (),
         };
 
         let barlines = measure.descendants().filter(|n| n.has_tag_name("barline"));
         for barline in barlines {
-            match barline.descendants().find(|n| n.has_tag_name("ending")) {
-                Some(n) => {
-                    let ending_type_str = n.attribute("type").unwrap();
-                    let ending_number_str = n.attribute("number").unwrap();
-                    match ending_type_str {
-                        "start" => {
-                            measure_meta_start.ending = Ending::from_str(ending_number_str)
-                                .expect("Invalid Ending string.");
-                        }
-                        "stop" => {
-                            // Used for first endings with a "downward jog"
-                            measure_meta_end.ending = Ending::from_str(ending_number_str)
-                                .expect("Invalid Ending string.");
-                        }
-                        "discontinue" => {
-                            // Used for second endings with no "downward jog"
-                            measure_meta_end.ending = Ending::from_str(ending_number_str)
-                                .expect("Invalid Ending string.");
-                        }
-                        t => {
-                            panic!("Encountered unsupported measure ending type {}", t);
-                        }
+            if let Some(n) = barline.descendants().find(|n| n.has_tag_name("ending")) {
+                let ending_type_str = n.attribute("type").unwrap();
+                let ending_number_str = n.attribute("number").unwrap();
+                match ending_type_str {
+                    "start" => {
+                        measure_meta_start.ending =
+                            Ending::from_str(ending_number_str).expect("Invalid Ending string.");
+                    }
+                    "stop" => {
+                        // Used for first endings with a "downward jog"
+                        measure_meta_end.ending =
+                            Ending::from_str(ending_number_str).expect("Invalid Ending string.");
+                    }
+                    "discontinue" => {
+                        // Used for second endings with no "downward jog"
+                        measure_meta_end.ending =
+                            Ending::from_str(ending_number_str).expect("Invalid Ending string.");
+                    }
+                    t => {
+                        panic!("Encountered unsupported measure ending type {}", t);
                     }
                 }
-                _ => (),
             };
         }
 
@@ -403,7 +363,7 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf, dump_input: bool) -> 
             measure_init.tempo = tempo;
         }
 
-        if measure_init_present == false {
+        if !measure_init_present {
             complete_music.push(MusicElement::MeasureInit(measure_init));
             measure_init_present = true;
         } else if measure_init != prev_measure_init {
@@ -439,17 +399,16 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf, dump_input: bool) -> 
         complete_music.push(MusicElement::MeasureMeta(measure_meta_end));
     }
 
-    let voice_cnt;
-    if voices.len() > MeasureChecker::MAX_SUPPORTED_VOICES {
+    let voice_cnt = if voices.len() > MeasureChecker::MAX_SUPPORTED_VOICES {
         info!(
             "Maximum supported voices is {} but piece contains {}. Threw away additional voices",
             MeasureChecker::MAX_SUPPORTED_VOICES,
             voices.len(),
         );
-        voice_cnt = MeasureChecker::MAX_SUPPORTED_VOICES;
+        MeasureChecker::MAX_SUPPORTED_VOICES
     } else {
-        voice_cnt = voices.len();
-    }
+        voices.len()
+    };
 
     info!(
         "Complete musical piece contains {} musical elements. {} voices.",
@@ -459,6 +418,7 @@ pub fn process_xml_to_bin(input: PathBuf, output: PathBuf, dump_input: bool) -> 
 
     let mut music_encoder = MusicEncoder::new(BufWriter::new(outfile));
     // Encode the musical composition into binary format
+    music_encoder.create_header(complete_music.len() * bin_encoder::MUSIC_ELEMENT_LENGTH)?;
     for element in complete_music {
         if dump_input {
             debug!("{:?}", element);

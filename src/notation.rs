@@ -1,12 +1,15 @@
 use crate::error::{Error, Result};
-use crate::music_xml_types::TimeModificationElement;
-use log::{debug, error, info, trace};
+use crate::music_xml_types::{TimeModificationElement, TupletElement, TupletType, ArticulationValue};
+use fraction::Fraction;
+use log::{error, info, trace, warn};
+use num::integer::lcm;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::convert::From;
-
 use std::str::FromStr;
+use strum::{EnumCount, EnumIter};
 
 pub struct MeasureChecker {
     measure: Vec<MusicElement>,
@@ -71,21 +74,12 @@ impl MeasureChecker {
                             time_mod,
                         ) as usize
                     } else {
+                        // Chord notes do not directly impact duration
                         0
                     }
                 }
                 MusicElement::Tuplet(t) => {
-                    match t.start_stop {
-                        TupletStartStop::TupletStart => {
-                            time_mod = Some(TimeModification::new(t.actual_notes, t.normal_notes));
-                        }
-                        TupletStartStop::TupletNone => {
-                            time_mod = None;
-                        }
-                        TupletStartStop::TupletStop => {
-                            time_mod = None;
-                        }
-                    }
+                    time_mod = t.into();
                     0 // does not directly impact sum
                 }
                 _ => {
@@ -94,31 +88,43 @@ impl MeasureChecker {
             })
             .sum();
 
-        if backup_duration < duration_since_backup {
-            let discrepancy = duration_since_backup - backup_duration;
-            println!("M{} duration tally {} did not match the backup element's duration {backup_duration}, inserting rests to accommodate {discrepancy} discrepancy.", self.measure_idx, duration_since_backup);
-            if let Some((duration, is_dotted)) =
-                NoteData::from_numeric_duration(discrepancy as u32, self.quarter_division)
-            {
-                // The new rest should begin on the next voice after the current one.
-                self.measure
-                    .push(MusicElement::NoteRest(NoteData::new_default_rest(
-                        duration,
-                        is_dotted,
-                        current_voice.next(),
-                    )));
-            } else {
-                panic!(
-                    "Could not convert {} in a rest duration value.",
-                    discrepancy
+        match backup_duration.cmp(&duration_since_backup) {
+            Ordering::Less => {
+                let discrepancy = duration_since_backup - backup_duration;
+                println!("M{} duration tally {} did not match the backup element's duration {backup_duration}, qtr_div: {} inserting rests to accommodate {discrepancy} discrepancy.", self.measure_idx, duration_since_backup, self.quarter_division);
+
+                match NoteData::from_numeric_duration(discrepancy as u32, self.quarter_division) {
+                    Some((duration, is_dotted, time_mod)) => {
+                        if time_mod.is_some() {
+                            warn!("time modification for rest is present, but not being used.")
+                        }
+                        // The new rest should begin on the next voice after the current one.
+                        self.measure
+                            .push(MusicElement::NoteRest(NoteData::new_default_rest(
+                                duration,
+                                is_dotted,
+                                current_voice.next(),
+                            )));
+                    }
+                    None => {
+                        panic!(
+                            "Could not convert {} in a rest duration value.",
+                            discrepancy
+                        );
+                    }
+                }
+            }
+            Ordering::Greater => {
+                info!(
+                    "Backup_duration {} was > duration_since_backup {} Assuming beginning of measure",
+                    backup_duration, duration_since_backup
                 );
             }
-        } else if backup_duration > duration_since_backup {
-            info!(
-                "Backup_duration {} was > duration_since_backup {} Assuming beginning of measure",
-                backup_duration, duration_since_backup
-            );
+            Ordering::Equal => {
+                // No additional action needed
+            }
         }
+
         self.clear_elems_since_backup();
     }
 
@@ -136,53 +142,29 @@ impl MeasureChecker {
         let mut voice_last_idx: [usize; Self::MAX_SUPPORTED_VOICES] =
             [0; Self::MAX_SUPPORTED_VOICES];
 
-        let mut time_mod: Option<TimeModification> = None;
+        if voices.len() > Self::MAX_SUPPORTED_VOICES {
+            panic!(
+                "Set of voices len {} exceeds max supported {}",
+                voices.len(),
+                Self::MAX_SUPPORTED_VOICES
+            );
+        }
+        let mut time_mod = None;
         let mut prev_voice = 0;
         // TODO: enumerate the iterator and create mapping of the last element of each voice
         // so a rest can be inserted at that location later if the voice duration is insufficient
         for (idx, elem) in self.measure.iter().cloned().enumerate() {
             match elem {
-                MusicElement::Tuplet(t) => match t.start_stop {
-                    TupletStartStop::TupletStart => {
-                        time_mod = Some(TimeModification::new(t.actual_notes, t.normal_notes));
-                    }
-                    TupletStartStop::TupletNone => {
-                        time_mod = None;
-                    }
-                    TupletStartStop::TupletStop => {
-                        time_mod = None;
-                    }
-                },
+                MusicElement::Tuplet(t) => time_mod = t.into(),
                 MusicElement::NoteRest(n) => {
                     // Do not include chord notes or grace notes in the count, as they do not impact measure duration
                     if n.chord == Chord::NoChord && n.special_note == SpecialNote::None {
-                        voice_durations[n.voice as usize] += n.get_duration_numeric(self.quarter_division, u32::from(self.beats), u32::from(self.beat_type), time_mod)
-                        // if time_mod.is_none() {
-                            // voice_durations[n.voice as usize] += n.get_duration_in_midi_ticks();
-                            // if self.measure_idx == 39 {
-                            //     println!(
-                            //         "V{}duration: {}",
-                            //         n.voice as usize, voice_durations[n.voice as usize]
-                            //     );
-                            // }
-                        // } else {
-                        //     voice_durations[n.voice as usize] += n.get_duration_in_midi_ticks()
-                        //         * time_mod.unwrap().normal_notes as u32
-                        //         / time_mod.unwrap().actual_notes as u32;
-
-                            // if self.measure_idx == 39 {
-                            //     println!(
-                            //         "V{}modduration: {}",
-                            //         n.voice as usize, voice_durations[n.voice as usize]
-                            //     );
-                            // }
-                        // }
-                        // if printout {
-                        // println!(
-                        //     "{:?} note: {:?} voice {}",
-                        //     n.note_type, n.note_rest, n.voice as usize
-                        // );
-                        // }
+                        voice_durations[n.voice as usize] += n.get_duration_numeric(
+                            self.quarter_division,
+                            u32::from(self.beats),
+                            u32::from(self.beat_type),
+                            time_mod,
+                        )
                     }
                     if n.voice as usize > prev_voice {
                         voice_last_idx[n.voice as usize] = idx - 1;
@@ -205,9 +187,12 @@ impl MeasureChecker {
                     voice_durations[voice_idx],discrepancy
                 );
                 // insert rest of discrepancy length at index at measure[voice_last_idx[voice_idx]]
-                if let Some((duration, is_dotted)) =
+                if let Some((duration, is_dotted, time_mod)) =
                     NoteData::from_numeric_duration(discrepancy, self.quarter_division)
                 {
+                    if time_mod.is_some() {
+                        warn!("time modification for rest is present, but not being used.")
+                    }
                     // The new rest should begin on the next voice after the current one.
                     self.measure.insert(
                         voice_last_idx[voice_idx],
@@ -233,44 +218,20 @@ struct DivisionsVec {
 }
 
 impl DivisionsVec {
-    const DIVISION_BASE: u32 = 960;
     // Create a new, empty DivisionsVec
     pub fn new() -> Self {
-        DivisionsVec {
-            inner: vec![Self::DIVISION_BASE],
-        }
-    }
-
-    pub fn can_divide_by(&self, d: u32) -> bool {
-        for elem in self.inner.iter() {
-            if (elem <= &1) || ((elem % d) != 0) {
-                return false;
-            }
-        }
-        true
-    }
-
-    pub fn divide_by(&mut self, d: u32) {
-        for elem in self.inner.iter_mut() {
-            *elem /= d;
-        }
+        DivisionsVec { inner: vec![] }
     }
 
     // Add an item to the DivisionsVec, but only if it's not already present
     pub fn add(&mut self, value: u32) {
-        if !self.inner.contains(&value) {
+        if value != 0 && !self.inner.contains(&value) {
             self.inner.push(value);
         }
     }
 
-    pub fn factor_by(&mut self, val: u32) {
-        while self.can_divide_by(val) {
-            self.divide_by(val);
-        }
-    }
-
-    pub fn get_divisions(&self) -> u32 {
-        Self::DIVISION_BASE / (Self::DIVISION_BASE / self.inner[0])
+    pub fn find_lcm(&mut self) -> u32 {
+        self.inner.iter().fold(1, |acc, &n| lcm(acc, n))
     }
 
     // Allow direct access to the inner Vec<u32>
@@ -281,49 +242,30 @@ impl DivisionsVec {
 
 pub fn calc_divisions_voices(music_elems_v: Vec<MusicElement>, dump_input: bool) -> (u32, usize) {
     let mut voices = BTreeSet::new();
-    let primes_v: Vec<u32> = vec![2, 3, 5];
     let mut integers_v = DivisionsVec::new();
+    let mut time_mod = None;
 
-    let mut tuplet_paren = false;
-    let mut tuplet_actual = 1u32;
-    let mut tuplet_normal = 1u32;
     for elem in music_elems_v.iter() {
         if dump_input {
             trace!("{:?}", elem);
         }
         match elem {
             MusicElement::Tuplet(t) => {
-                if t.start_stop == TupletStartStop::TupletStart {
-                    // Tuplet_paren indicates if a block of tuplets is being processed (Tuplet Parenthesis)
-                    tuplet_paren = true;
-                    tuplet_actual = t.actual_notes as u32;
-                    tuplet_normal = t.normal_notes as u32;
-                    // debug!(
-                    //     "tuplet actual {} tup normal {}",
-                    //     tuplet_actual, tuplet_normal
-                    // );
-                } else if t.start_stop == TupletStartStop::TupletStop {
-                    tuplet_paren = false;
-                }
+                time_mod = (*t).into();
             }
             MusicElement::NoteRest(n) => {
                 voices.insert(n.voice as u8);
-                let std_duration = n.get_duration_in_midi_ticks();
-                if tuplet_paren {
-                    integers_v.add(std_duration * tuplet_normal / tuplet_actual);
-                } else {
-                    integers_v.add(std_duration);
-                }
+                integers_v.add(n.get_note_multiple(time_mod).map_or_else(|| 0, |v| v));
             }
             _ => {}
         }
     }
-    // Factor the values
-    for prime in primes_v.iter() {
-        integers_v.factor_by(*prime);
-    }
 
-    (integers_v.get_divisions(), voices.len())
+    // for (idx, elem) in integers_v.inner().iter().enumerate() {
+    //     println!("{idx},{elem}");
+    // }
+
+    (integers_v.find_lcm(), voices.len())
 }
 
 #[derive(Eq, PartialEq, Default, Debug, Copy, Clone)]
@@ -332,9 +274,24 @@ pub struct TimeModification {
     normal_notes: TupletNormal,
 }
 
+fn convert_time_modification(t_mod: &TimeModificationElement) -> TimeModification {
+    let tup_ac = TupletActual::try_from(t_mod.actual_notes.as_ref())
+        .expect("Cannot convert this TupletActual string.");
+    let tup_norm = TupletNormal::try_from(t_mod.normal_notes.as_ref())
+        .expect("Cannot convert this TupletNormal string.");
+
+    TimeModification::new(tup_ac, tup_norm)
+}
+
 impl From<TimeModificationElement> for TimeModification {
     fn from(time_mod_elem: TimeModificationElement) -> Self {
-        TimeModification::new(time_mod_elem.actual_notes, time_mod_elem.normal_notes)
+        convert_time_modification(&time_mod_elem)
+    }
+}
+
+impl From<&TimeModificationElement> for TimeModification {
+    fn from(time_mod_elem: &TimeModificationElement) -> Self {
+        convert_time_modification(time_mod_elem)
     }
 }
 
@@ -514,6 +471,7 @@ impl ToString for Alter {
         }
     }
 }
+
 impl FromStr for Octave {
     type Err = Error;
     fn from_str(input: &str) -> Result<Octave> {
@@ -552,7 +510,7 @@ impl FromStr for Note {
 #[repr(u8)]
 pub enum NoteConnection {
     #[default]
-    NoTie = 0,
+    None = 0,
     StartTie,
     EndTie,
 }
@@ -572,7 +530,7 @@ impl FromStr for NoteConnection {
 #[repr(u8)]
 pub enum SlurConnection {
     #[default]
-    NoSlur = 0,
+    None = 0,
     StartSlur,
     EndSlur,
 }
@@ -603,9 +561,63 @@ pub enum MeasureStartEnd {
 pub enum Articulation {
     #[default]
     None,
-    Marcato,
+    Accent,
+    StrongAccent,
     Stacatto,
-    Legato,
+    Staccatissimo,
+    Tenuto,
+    DetachedLegato,
+    Stress,
+}
+
+impl From<Articulation> for ArticulationValue {
+    fn from(t: Articulation) -> Self {
+        match t {
+            Articulation::None => ArticulationValue::None,
+            Articulation::Accent => ArticulationValue::Accent,
+            Articulation::StrongAccent => ArticulationValue::StrongAccent,
+            Articulation::Stacatto => ArticulationValue::Stacatto,
+            Articulation::Staccatissimo => ArticulationValue::Staccatissimo,
+            Articulation::Tenuto => ArticulationValue::Tenuto,
+            Articulation::DetachedLegato => ArticulationValue::DetachedLegato,
+            Articulation::Stress => ArticulationValue::Stress,
+        }
+    }
+}
+
+impl ToString for Articulation {
+    fn to_string(&self) -> String {
+        match self {
+            Articulation::None => "".to_string(),
+            Articulation::Accent => "accent".to_string(),
+            Articulation::StrongAccent => "strong-accent".to_string(),
+            Articulation::Stacatto => "staccato".to_string(),
+            Articulation::Staccatissimo => "staccatissimo".to_string(),
+            Articulation::Tenuto => "tenuto".to_string(),
+            Articulation::DetachedLegato => "detached-legato".to_string(),
+            Articulation::Stress => "stress".to_string(),
+        }
+    }
+}
+
+impl FromStr for Articulation {
+    type Err = Error;
+    fn from_str(input: &str) -> Result<Articulation> {
+        match input {
+            "accent" => Ok(Articulation::Accent),
+            "strong-accent" => Ok(Articulation::StrongAccent),
+            "staccato" => Ok(Articulation::Stacatto),
+            "tenuto" => Ok(Articulation::Tenuto),
+            "detached-legato" => Ok(Articulation::DetachedLegato),
+            "staccatissimo" => Ok(Articulation::Staccatissimo),
+            "spiccato" => Ok(Articulation::Staccatissimo),
+            "stress" => Ok(Articulation::Stress),
+            _ => {
+                // Unsupported articulation tag
+                Ok(Articulation::None)
+            }
+        }
+    }
 }
 
 #[derive(Eq, PartialEq, Copy, Clone, FromPrimitive, Default, Debug)]
@@ -627,38 +639,301 @@ impl From<Arpeggiate> for bool {
 
 #[derive(Eq, PartialEq, Copy, Clone, FromPrimitive, Default, Debug)]
 #[repr(u8)]
-pub enum Stress {
-    #[default]
-    NotAccented,
-    Accented,
-}
-
-#[derive(Eq, PartialEq, Copy, Clone, FromPrimitive, Default, Debug)]
-#[repr(u8)]
 pub enum Chord {
     #[default]
     NoChord,
     Chord,
 }
-#[derive(Eq, PartialEq, Copy, Clone, FromPrimitive, Default, Debug)]
+
+// TupletNumber is used for tracking tuplets when they are nested
+#[derive(Eq, PartialEq, Copy, Clone, FromPrimitive, EnumCount, EnumIter, Default, Debug)]
 #[repr(u8)]
 pub enum TupletNumber {
     #[default]
-    TupletOne,
-    TupletTwo,
+    One,
+    Two,
+    Three,
+    Four,
+}
+
+impl ToString for TupletNumber {
+    fn to_string(&self) -> String {
+        match self {
+            TupletNumber::One => "1".to_string(),
+            TupletNumber::Two => "2".to_string(),
+            TupletNumber::Three => "3".to_string(),
+            TupletNumber::Four => "4".to_string(),
+        }
+    }
 }
 
 #[derive(Eq, PartialEq, Copy, Clone, FromPrimitive, Default, Debug)]
 #[repr(u8)]
 pub enum TupletStartStop {
     #[default]
-    TupletNone,
+    None,
     TupletStart,
     TupletStop,
 }
 
-pub type TupletActual = u8;
-pub type TupletNormal = u8;
+trait AsU32 {
+    fn as_u32(&self) -> u32;
+}
+
+#[derive(Eq, PartialEq, Copy, Clone, FromPrimitive, Default, Debug)]
+#[repr(u8)]
+pub enum TupletActual {
+    #[default]
+    Two = 0,
+    Three,
+    Four,
+    Five,
+    Six,
+    Seven,
+    Eight,
+    Nine,
+    Ten,
+    Eleven,
+    Thirteen,
+    Fifteen,
+    Sixteen,
+    Seventeen,
+    Eighteen,
+    TwentyOne,
+    TwentyFive,
+}
+
+impl AsU32 for TupletActual {
+    fn as_u32(&self) -> u32 {
+        match self {
+            TupletActual::Two => 2,
+            TupletActual::Three => 3,
+            TupletActual::Four => 4,
+            TupletActual::Five => 5,
+            TupletActual::Six => 6,
+            TupletActual::Seven => 7,
+            TupletActual::Eight => 8,
+            TupletActual::Nine => 9,
+            TupletActual::Ten => 10,
+            TupletActual::Eleven => 11,
+            TupletActual::Thirteen => 13,
+            TupletActual::Fifteen => 15,
+            TupletActual::Sixteen => 16,
+            TupletActual::Seventeen => 17,
+            TupletActual::Eighteen => 18,
+            TupletActual::TwentyOne => 21,
+            TupletActual::TwentyFive => 25,
+        }
+    }
+}
+
+impl TryFrom<u32> for TupletActual {
+    type Error = Error;
+
+    fn try_from(value: u32) -> Result<Self> {
+        match value {
+            2 => Ok(TupletActual::Two),
+            3 => Ok(TupletActual::Three),
+            4 => Ok(TupletActual::Four),
+            5 => Ok(TupletActual::Five),
+            6 => Ok(TupletActual::Six),
+            7 => Ok(TupletActual::Seven),
+            8 => Ok(TupletActual::Eight),
+            9 => Ok(TupletActual::Nine),
+            10 => Ok(TupletActual::Ten),
+            11 => Ok(TupletActual::Eleven),
+            13 => Ok(TupletActual::Thirteen),
+            15 => Ok(TupletActual::Fifteen),
+            16 => Ok(TupletActual::Sixteen),
+            17 => Ok(TupletActual::Seventeen),
+            18 => Ok(TupletActual::Eighteen),
+            21 => Ok(TupletActual::TwentyOne),
+            25 => Ok(TupletActual::TwentyFive),
+            _ => Err(Error::Unit),
+        }
+    }
+}
+
+impl TryFrom<&str> for TupletActual {
+    type Error = Error;
+    fn try_from(inp_string: &str) -> Result<Self> {
+        match inp_string {
+            "2" => Ok(TupletActual::Two),
+            "3" => Ok(TupletActual::Three),
+            "4" => Ok(TupletActual::Four),
+            "5" => Ok(TupletActual::Five),
+            "6" => Ok(TupletActual::Six),
+            "7" => Ok(TupletActual::Seven),
+            "8" => Ok(TupletActual::Eight),
+            "9" => Ok(TupletActual::Nine),
+            "10" => Ok(TupletActual::Ten),
+            "11" => Ok(TupletActual::Eleven),
+            "13" => Ok(TupletActual::Thirteen),
+            "15" => Ok(TupletActual::Fifteen),
+            "16" => Ok(TupletActual::Sixteen),
+            "17" => Ok(TupletActual::Seventeen),
+            "18" => Ok(TupletActual::Eighteen),
+            "21" => Ok(TupletActual::TwentyOne),
+            "25" => Ok(TupletActual::TwentyFive),
+            _ => Err(Error::Unit),
+        }
+    }
+}
+
+impl FromStr for TupletActual {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "2" => Ok(TupletActual::Two),
+            "3" => Ok(TupletActual::Three),
+            "4" => Ok(TupletActual::Four),
+            "5" => Ok(TupletActual::Five),
+            "6" => Ok(TupletActual::Six),
+            "7" => Ok(TupletActual::Seven),
+            "8" => Ok(TupletActual::Eight),
+            "9" => Ok(TupletActual::Nine),
+            "10" => Ok(TupletActual::Ten),
+            "11" => Ok(TupletActual::Eleven),
+            "13" => Ok(TupletActual::Thirteen),
+            "15" => Ok(TupletActual::Fifteen),
+            "16" => Ok(TupletActual::Sixteen),
+            "17" => Ok(TupletActual::Seventeen),
+            "18" => Ok(TupletActual::Eighteen),
+            "21" => Ok(TupletActual::TwentyOne),
+            "25" => Ok(TupletActual::TwentyFive),
+            _ => Err(Error::Unit),
+        }
+    }
+}
+
+impl From<TupletActual> for String {
+    fn from(val: TupletActual) -> Self {
+        match val {
+            TupletActual::Two => "2".to_string(),
+            TupletActual::Three => "3".to_string(),
+            TupletActual::Four => "4".to_string(),
+            TupletActual::Five => "5".to_string(),
+            TupletActual::Six => "6".to_string(),
+            TupletActual::Seven => "7".to_string(),
+            TupletActual::Eight => "8".to_string(),
+            TupletActual::Nine => "9".to_string(),
+            TupletActual::Ten => "10".to_string(),
+            TupletActual::Eleven => "11".to_string(),
+            TupletActual::Thirteen => "13".to_string(),
+            TupletActual::Fifteen => "15".to_string(),
+            TupletActual::Sixteen => "16".to_string(),
+            TupletActual::Seventeen => "17".to_string(),
+            TupletActual::Eighteen => "18".to_string(),
+            TupletActual::TwentyOne => "21".to_string(),
+            TupletActual::TwentyFive => "25".to_string(),
+        }
+    }
+}
+
+#[derive(Eq, PartialEq, Copy, Clone, FromPrimitive, Default, Debug)]
+#[repr(u8)]
+pub enum TupletNormal {
+    #[default]
+    One = 0,
+    Two,
+    Three,
+    Four,
+    Six,
+    Eight,
+    Nine,
+    Twelve,
+    Sixteen,
+}
+
+impl AsU32 for TupletNormal {
+    fn as_u32(&self) -> u32 {
+        match self {
+            TupletNormal::One => 1,
+            TupletNormal::Two => 2,
+            TupletNormal::Three => 3,
+            TupletNormal::Four => 4,
+            TupletNormal::Six => 6,
+            TupletNormal::Eight => 8,
+            TupletNormal::Nine => 9,
+            TupletNormal::Twelve => 12,
+            TupletNormal::Sixteen => 16,
+        }
+    }
+}
+
+impl TryFrom<u32> for TupletNormal {
+    type Error = Error;
+
+    fn try_from(value: u32) -> Result<Self> {
+        match value {
+            1 => Ok(TupletNormal::One),
+            2 => Ok(TupletNormal::Two),
+            3 => Ok(TupletNormal::Three),
+            4 => Ok(TupletNormal::Four),
+            6 => Ok(TupletNormal::Six),
+            8 => Ok(TupletNormal::Eight),
+            9 => Ok(TupletNormal::Nine),
+            12 => Ok(TupletNormal::Twelve),
+            16 => Ok(TupletNormal::Sixteen),
+            _ => Err(Error::Unit),
+        }
+    }
+}
+
+impl TryFrom<&str> for TupletNormal {
+    type Error = Error;
+    fn try_from(inp_string: &str) -> Result<Self> {
+        match inp_string {
+            "1" => Ok(TupletNormal::One),
+            "2" => Ok(TupletNormal::Two),
+            "3" => Ok(TupletNormal::Three),
+            "4" => Ok(TupletNormal::Four),
+            "6" => Ok(TupletNormal::Six),
+            "8" => Ok(TupletNormal::Eight),
+            "9" => Ok(TupletNormal::Nine),
+            "12" => Ok(TupletNormal::Twelve),
+            "16" => Ok(TupletNormal::Sixteen),
+            _ => Err(Error::Unit),
+        }
+    }
+}
+
+impl FromStr for TupletNormal {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "1" => Ok(TupletNormal::One),
+            "2" => Ok(TupletNormal::Two),
+            "3" => Ok(TupletNormal::Three),
+            "4" => Ok(TupletNormal::Four),
+            "6" => Ok(TupletNormal::Six),
+            "8" => Ok(TupletNormal::Eight),
+            "9" => Ok(TupletNormal::Nine),
+            "12" => Ok(TupletNormal::Twelve),
+            "16" => Ok(TupletNormal::Sixteen),
+            _ => Err(Error::Unit),
+        }
+    }
+}
+
+impl From<TupletNormal> for String {
+    fn from(val: TupletNormal) -> Self {
+        match val {
+            TupletNormal::One => "1".to_string(),
+            TupletNormal::Two => "2".to_string(),
+            TupletNormal::Three => "3".to_string(),
+            TupletNormal::Four => "4".to_string(),
+            TupletNormal::Six => "6".to_string(),
+            TupletNormal::Eight => "8".to_string(),
+            TupletNormal::Nine => "9".to_string(),
+            TupletNormal::Twelve => "12".to_string(),
+            TupletNormal::Sixteen => "16".to_string(),
+        }
+    }
+}
+
 pub type TupletDotted = bool;
 
 #[derive(Eq, PartialEq, Copy, Clone, Default, Debug)]
@@ -668,6 +943,44 @@ pub struct TupletData {
     pub actual_notes: TupletActual,
     pub normal_notes: TupletNormal,
     pub dotted: TupletDotted,
+}
+
+impl From<TupletData> for Option<TupletElement> {
+    fn from(t: TupletData) -> Self {
+        match t.start_stop {
+            TupletStartStop::TupletStart => Some(TupletElement {
+                r#type: TupletType::Start,
+                number: t.tuplet_number.to_string(),
+            }),
+            TupletStartStop::None => None,
+            TupletStartStop::TupletStop => None,
+        }
+    }
+}
+
+impl From<TupletData> for Option<TimeModificationElement> {
+    fn from(t: TupletData) -> Self {
+        match t.start_stop {
+            TupletStartStop::TupletStart => Some(TimeModificationElement {
+                actual_notes: t.actual_notes.into(),
+                normal_notes: t.normal_notes.into(),
+            }),
+            TupletStartStop::None => None,
+            TupletStartStop::TupletStop => None,
+        }
+    }
+}
+
+impl From<TupletData> for Option<TimeModification> {
+    fn from(t: TupletData) -> Self {
+        match t.start_stop {
+            TupletStartStop::TupletStart => {
+                Some(TimeModification::new(t.actual_notes, t.normal_notes))
+            }
+            TupletStartStop::None => None,
+            TupletStartStop::TupletStop => None,
+        }
+    }
 }
 
 impl From<Chord> for bool {
@@ -721,7 +1034,6 @@ pub enum PhraseDynamics {
     Diminuendo,
     Niente,
     Rinforzando,
-    Tenuto,
     Pianississimo,
     Pianissimo,
     Piano,
@@ -826,12 +1138,11 @@ impl Tempo {
     }
 
     pub fn new_from_raw(raw_tempo: u8) -> Tempo {
-        let assign_tempo: u8;
-        if raw_tempo > Self::MAX_SUPPORTED_RAW_TEMPO {
-            assign_tempo = Self::MAX_SUPPORTED_RAW_TEMPO
+        let assign_tempo: u8 = if raw_tempo > Self::MAX_SUPPORTED_RAW_TEMPO {
+            Self::MAX_SUPPORTED_RAW_TEMPO
         } else {
-            assign_tempo = raw_tempo;
-        }
+            raw_tempo
+        };
 
         Tempo(assign_tempo)
     }
@@ -996,23 +1307,6 @@ pub enum DalSegno {
     DaCapoAlCoda,
     DaCapoAlFine,
 }
-
-// #[derive(Eq, PartialEq, Copy, Clone, FromPrimitive, Default, Debug)]
-// #[repr(u8)]
-// pub enum TrebleBassClef {
-//     #[default]
-//     TrebleClef,
-//     BassClef,
-// }
-
-// impl From<TrebleBassClef> for bool {
-//     fn from(f: TrebleBassClef) -> bool {
-//         match f {
-//             TrebleBassClef::TrebleClef => false,
-//             TrebleBassClef::BassClef => true,
-//         }
-//     }
-// }
 
 #[derive(Eq, PartialEq, PartialOrd, Ord, Copy, Clone, FromPrimitive, Default, Debug)]
 #[repr(u8)]
@@ -1238,7 +1532,6 @@ pub struct NoteData {
     pub articulation: Articulation,
     pub trill: Trill,
     pub ties: NoteConnection,
-    pub stress: Stress,
     pub chord: Chord,
     pub slur: SlurConnection,
     pub voice: Voice,
@@ -1247,81 +1540,100 @@ pub struct NoteData {
 type IsDotted = bool;
 
 impl NoteData {
-    const MIDI_TICKS_SEMI_HEMI_DEMI_SEMI_QUAVER: u32 = 30;
-    const MIDI_TICKS_HEMI_DEMI_SEMI_QUAVER: u32 = 60;
-    const MIDI_TICKS_DEMI_SEMI_QUAVER: u32 = 120;
-    const MIDI_TICKS_SEMI_QUAVER: u32 = 240;
-    const MIDI_TICKS_QUAVER: u32 = 480;
-    const MIDI_TICKS_CROCHET: u32 = 960;
-    const MIDI_TICKS_MINIM: u32 = 1920;
-    const MIDI_TICKS_SEMIBREVE: u32 = 3840;
+    const SEMIBREVE_DENOMINATOR: u32 = 1;
+    const MINIM_DENOMINATOR: u32 = 2;
+    const CROCHET_DENOMINATOR: u32 = 4;
+    const QUAVER_DENOMINATOR: u32 = 8;
+    const SEMI_QUAVER_DENOMINATOR: u32 = 16;
+    const DEMI_SEMI_QUAVER_DENOMINATOR: u32 = 32;
+    const HEMI_DEMI_SEMI_QUAVER_DENOMINATOR: u32 = 64;
+    const SEMI_HEMI_DEMI_SEMI_QUAVER_DENOMINATOR: u32 = 128;
+    const IS_DOTTED_DENOMINATOR: u32 = 2;
+    const IS_DOTTED_NUMERATOR: u32 = 3;
 
-    pub fn new_default_rest(note_type: NoteType, is_dotted: IsDotted, voice: Voice) -> NoteData {
-        let mut note = NoteData::default();
-        note.note_rest = NoteRestValue::Rest;
-        note.note_type = note_type;
-        note.dotted = is_dotted;
-        note.voice = voice;
-        note
+    const MIDI_TICKS_SEMI_HEMI_DEMI_SEMI_QUAVER: u32 = Self::MIDI_TICKS_CROCHET / 32;
+    const MIDI_TICKS_HEMI_DEMI_SEMI_QUAVER: u32 = Self::MIDI_TICKS_CROCHET / 16;
+    const MIDI_TICKS_DEMI_SEMI_QUAVER: u32 = Self::MIDI_TICKS_CROCHET / 8;
+    const MIDI_TICKS_SEMI_QUAVER: u32 = Self::MIDI_TICKS_CROCHET / 4;
+    const MIDI_TICKS_QUAVER: u32 = Self::MIDI_TICKS_CROCHET / 2;
+    const MIDI_TICKS_CROCHET: u32 = 960;
+    const MIDI_TICKS_MINIM: u32 = Self::MIDI_TICKS_CROCHET * 2;
+    const MIDI_TICKS_SEMIBREVE: u32 = Self::MIDI_TICKS_CROCHET * 4;
+
+    pub fn new_default_rest(note_type: NoteType, dotted: IsDotted, voice: Voice) -> NoteData {
+        NoteData {
+            note_rest: NoteRestValue::Rest,
+            note_type,
+            dotted,
+            voice,
+            ..Default::default()
+        }
     }
 
-    pub fn get_duration_in_midi_ticks(&self) -> u32 {
+    pub fn get_note_multiple(&self, time_mods: Option<TimeModification>) -> Option<u32> {
+        let mut numer: u32 = 1;
+        if self.special_note != SpecialNote::None {
+            // Some notes have no duration
+            return None;
+        }
+
+        let mut denom = match self.note_type {
+            NoteType::SemiBreve => Self::SEMIBREVE_DENOMINATOR,
+            NoteType::Minim => Self::MINIM_DENOMINATOR,
+            NoteType::Crochet => Self::CROCHET_DENOMINATOR,
+            NoteType::Quaver => Self::QUAVER_DENOMINATOR,
+            NoteType::SemiQuaver => Self::SEMI_QUAVER_DENOMINATOR,
+            NoteType::DemiSemiQuaver => Self::DEMI_SEMI_QUAVER_DENOMINATOR,
+            NoteType::HemiDemiSemiQuaver => Self::HEMI_DEMI_SEMI_QUAVER_DENOMINATOR,
+            NoteType::SemiHemiDemiSemiQuaver => Self::SEMI_HEMI_DEMI_SEMI_QUAVER_DENOMINATOR,
+        };
+
+        if self.dotted {
+            numer *= Self::IS_DOTTED_NUMERATOR;
+            denom *= Self::IS_DOTTED_DENOMINATOR;
+        }
+
+        if let Some(val) = time_mods {
+            numer *= val.normal_notes.as_u32();
+            denom *= val.actual_notes.as_u32();
+        }
+        let f = Fraction::new(numer, denom);
+        //println!("{}",f);
+        f.denom().map(|inner| *inner as u32)
+    }
+
+    pub fn get_duration_in_midi_ticks(&self, time_mods: Option<TimeModification>) -> u32 {
+        let mut numerator: u32 = 1;
+        let mut denominator: u32 = 1;
+
+        if self.special_note != SpecialNote::None {
+            // Some notes have no duration
+            return 0;
+        }
+
+        if self.dotted {
+            numerator = Self::IS_DOTTED_NUMERATOR;
+            denominator = Self::IS_DOTTED_DENOMINATOR;
+        }
+
+        if let Some(val) = time_mods {
+            numerator *= val.normal_notes.as_u32();
+            denominator *= val.actual_notes.as_u32();
+        }
+
         match self.note_type {
-            NoteType::SemiBreve => {
-                Self::MIDI_TICKS_SEMIBREVE
-                    + match self.dotted {
-                        true => Self::MIDI_TICKS_SEMIBREVE / 2,
-                        false => 0,
-                    }
-            }
-            NoteType::Minim => {
-                Self::MIDI_TICKS_MINIM
-                    + match self.dotted {
-                        true => Self::MIDI_TICKS_MINIM / 2,
-                        false => 0,
-                    }
-            }
-            NoteType::Crochet => {
-                Self::MIDI_TICKS_CROCHET
-                    + match self.dotted {
-                        true => Self::MIDI_TICKS_CROCHET / 2,
-                        false => 0,
-                    }
-            }
-            NoteType::Quaver => {
-                Self::MIDI_TICKS_QUAVER
-                    + match self.dotted {
-                        true => Self::MIDI_TICKS_QUAVER / 2,
-                        false => 0,
-                    }
-            }
-            NoteType::SemiQuaver => {
-                Self::MIDI_TICKS_SEMI_QUAVER
-                    + match self.dotted {
-                        true => Self::MIDI_TICKS_SEMI_QUAVER / 2,
-                        false => 0,
-                    }
-            }
-            NoteType::DemiSemiQuaver => {
-                Self::MIDI_TICKS_DEMI_SEMI_QUAVER
-                    + match self.dotted {
-                        true => Self::MIDI_TICKS_DEMI_SEMI_QUAVER / 2,
-                        false => 0,
-                    }
-            }
+            NoteType::SemiBreve => Self::MIDI_TICKS_SEMIBREVE * numerator / denominator,
+            NoteType::Minim => Self::MIDI_TICKS_MINIM * numerator / denominator,
+            NoteType::Crochet => Self::MIDI_TICKS_CROCHET * numerator / denominator,
+            NoteType::Quaver => Self::MIDI_TICKS_QUAVER * numerator / denominator,
+            NoteType::SemiQuaver => Self::MIDI_TICKS_SEMI_QUAVER * numerator / denominator,
+            NoteType::DemiSemiQuaver => Self::MIDI_TICKS_DEMI_SEMI_QUAVER * numerator / denominator,
             NoteType::HemiDemiSemiQuaver => {
-                Self::MIDI_TICKS_HEMI_DEMI_SEMI_QUAVER
-                    + match self.dotted {
-                        true => Self::MIDI_TICKS_HEMI_DEMI_SEMI_QUAVER / 2,
-                        false => 0,
-                    }
+                Self::MIDI_TICKS_HEMI_DEMI_SEMI_QUAVER * numerator / denominator
             }
+
             NoteType::SemiHemiDemiSemiQuaver => {
-                Self::MIDI_TICKS_SEMI_HEMI_DEMI_SEMI_QUAVER
-                    + match self.dotted {
-                        true => Self::MIDI_TICKS_SEMI_HEMI_DEMI_SEMI_QUAVER / 2,
-                        false => 0,
-                    }
+                Self::MIDI_TICKS_SEMI_HEMI_DEMI_SEMI_QUAVER * numerator / denominator
             }
         }
     }
@@ -1337,14 +1649,21 @@ impl NoteData {
             // Some notes have no duration
             return 0;
         }
-        let mut numerator: u32 = 2;
-        let mut denominator: u32 = 2;
+
+        let mut numerator: u32 = 1;
+        let mut denominator: u32 = 1;
+
         if self.dotted {
             numerator = 3;
+            denominator = 2;
         }
-        if time_mods.is_some() {
-            numerator *= time_mods.unwrap().normal_notes as u32;
-            denominator *= time_mods.unwrap().actual_notes as u32;
+
+        if let Some(val) = time_mods {
+            numerator *= val.normal_notes.as_u32();
+            denominator *= val.actual_notes.as_u32();
+            if denominator == 0 {
+                panic!("time_mod denominator cannot be zero.");
+            }
         }
 
         match self.note_type {
@@ -1405,42 +1724,90 @@ impl NoteData {
     pub fn from_numeric_duration(
         numeric_duration: u32,
         quarter_division: u32,
-    ) -> Option<(NoteType, IsDotted)> {
-        let is_dotted = |standard_duration: u32| {
-            if (standard_duration * 3) % 2 != 0 {
-                panic!("Could not determine is_dotted. num_duration: {} std_duration {standard_duration} * 3 is not evenly divisible by 2",numeric_duration);
-            }
-            numeric_duration == standard_duration * 3 / 2
-        };
-        match numeric_duration {
-            _ if is_dotted(4 * quarter_division) => Some((NoteType::SemiBreve, true)),
-            _ if numeric_duration == 4 * quarter_division => Some((NoteType::SemiBreve, false)),
-            _ if is_dotted(2 * quarter_division) => Some((NoteType::Minim, true)),
-            _ if numeric_duration == 2 * quarter_division => Some((NoteType::Minim, false)),
-            _ if is_dotted(quarter_division) => Some((NoteType::Crochet, true)),
-            _ if numeric_duration == quarter_division => Some((NoteType::Crochet, false)),
-            _ if is_dotted(quarter_division / 2) => Some((NoteType::Quaver, true)),
-            _ if numeric_duration == quarter_division / 2 => Some((NoteType::Quaver, false)),
-            _ if is_dotted(quarter_division / 4) => Some((NoteType::SemiQuaver, true)),
-            _ if numeric_duration == quarter_division / 4 => Some((NoteType::SemiQuaver, false)),
-            //_ if numeric_duration == quarter_division / 6 => Some((Duration::SemiQuaver, false)),
-            _ if is_dotted(quarter_division / 8) => Some((NoteType::DemiSemiQuaver, true)),
-            _ if numeric_duration == quarter_division / 8 => {
-                Some((NoteType::DemiSemiQuaver, false))
-            }
-            _ if is_dotted(quarter_division / 16) => Some((NoteType::HemiDemiSemiQuaver, true)),
-            _ if numeric_duration == quarter_division / 16 => {
-                Some((NoteType::HemiDemiSemiQuaver, false))
-            }
-            _ if is_dotted(quarter_division / 32) => Some((NoteType::SemiHemiDemiSemiQuaver, true)),
-            _ if numeric_duration == quarter_division / 32 => {
-                Some((NoteType::SemiHemiDemiSemiQuaver, false))
-            }
-            _ => {
-                error!("Unsupported combination: Numeric_Duration: {numeric_duration} Qtr_Note_Divisions: {quarter_division}");
-                None
-            } // Note can't be represented using this quarter_division
+    ) -> Option<(NoteType, IsDotted, Option<TimeModification>)> {
+        let note_types = [
+            NoteType::SemiBreve,
+            NoteType::Minim,
+            NoteType::Crochet,
+            NoteType::Quaver,
+            NoteType::SemiQuaver,
+            NoteType::DemiSemiQuaver,
+            NoteType::HemiDemiSemiQuaver,
+            NoteType::SemiHemiDemiSemiQuaver,
+        ];
+
+        let is_dotted = |base: u32, duration| (3 * base) / 2 == duration;
+
+        // Start from a quarter note and expand in both directions.
+        let mut base_duration = quarter_division;
+        let mut exponent = 2; // index for quarter in note_types
+
+        if is_dotted(base_duration, numeric_duration) {
+            return Some((note_types[exponent], true, None));
         }
+
+        while base_duration > numeric_duration && exponent < note_types.len() - 1 {
+            base_duration /= 2;
+            exponent += 1;
+            if is_dotted(base_duration, numeric_duration) {
+                return Some((note_types[exponent], true, None));
+            }
+        }
+
+        while base_duration < numeric_duration && exponent > 0 {
+            base_duration *= 2;
+            exponent -= 1;
+            if is_dotted(base_duration, numeric_duration) {
+                return Some((note_types[exponent], true, None));
+            }
+        }
+
+        // Check for time modification representation (tuplets)
+        let mut tuplet_representation = None;
+        for nn in 2..=16 {
+            if nn == 5 || nn == 7 || nn == 10 || nn == 11 || nn == 13 || nn == 14 {
+                // The TupletNormal type does not support these numerators
+                continue;
+            }
+            for an in 2..=25 {
+                if an == 12 || an == 14 || an == 19 || an == 20 || an == 22 || an == 23 || an == 24
+                {
+                    // The TupletActual type does not support these divisors
+                    continue;
+                }
+                if (base_duration * nn) == numeric_duration * an {
+                    if an != nn {
+                        tuplet_representation = Some(TimeModification {
+                            actual_notes: TupletActual::try_from(an).unwrap_or_else(|_e| {
+                                panic!("Couldn't create TupletActual from u32 value {an}")
+                            }),
+                            normal_notes: TupletNormal::try_from(nn).unwrap_or_else(|_e| {
+                                panic!("Couldn't create TupletNormal from u32 value {nn}")
+                            }),
+                        });
+                    }
+                    break;
+                }
+            }
+            if tuplet_representation.is_some() {
+                break;
+            }
+        }
+
+        let note_type = if exponent < note_types.len() {
+            note_types[exponent]
+        } else {
+            // exponent >= note_types.len() case
+            *note_types.last().unwrap()
+        };
+        if let Some(val) = tuplet_representation {
+            println!("TBC. Qtr{quarter_division} Duration {numeric_duration} NoteType: {:?} TimeMod: {:?}", note_type, val);
+        }
+        // else {
+        //     println!("TBC. Qtr{quarter_division} Duration {numeric_duration} NoteType: {:?} isDotted: {}", note_type, is_dotted);
+        // }
+
+        Some((note_type, false, tuplet_representation))
     }
 }
 #[derive(Eq, PartialEq, Default, Clone, Copy, Debug)]
@@ -1488,9 +1855,7 @@ impl NoteRestValue {
 
         numeric_note += numeric_alter;
         numeric_note += (numeric_octave - 4) * 12;
-        if numeric_note > Self::MAX_NOTE_VALUE {
-            Err(Error::OutofBounds)
-        } else if numeric_note < Self::MIN_NOTE_VALUE {
+        if !(Self::MIN_NOTE_VALUE..=Self::MAX_NOTE_VALUE).contains(&numeric_note) {
             Err(Error::OutofBounds)
         } else {
             Ok(NoteRestValue::Pitch(numeric_note as u8))
@@ -1500,22 +1865,22 @@ impl NoteRestValue {
     pub fn decode_composite_note(self) -> Option<(Note, Alter, Octave)> {
         if let Some(octave) = self.get_octave() {
             match self {
-                NoteRestValue::Rest => return None,
+                NoteRestValue::Rest => None,
                 NoteRestValue::Pitch(v) => {
                     let oct_u8 = octave as u8;
                     let note_numeric = (v as i32) - (((oct_u8 as i32) - 4) * 12);
                     let note: Option<Note> = FromPrimitive::from_u8(note_numeric as u8);
                     match note {
-                        None => return None,
+                        None => None,
                         Some(n) => {
                             let (somenote, somealter) = n.get_note_alter_tuple();
-                            return Some((somenote, somealter, octave));
+                            Some((somenote, somealter, octave))
                         }
                     }
                 }
             }
         } else {
-            return None;
+            None
         }
     }
 
@@ -1530,6 +1895,47 @@ impl NoteRestValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_from_numeric_duration() {
+        let result = NoteData::from_numeric_duration(36, 24);
+        assert_eq!(result, Some((NoteType::Crochet, true, None)));
+
+        let result = NoteData::from_numeric_duration(1440, 480);
+        assert_eq!(result, Some((NoteType::Minim, true, None)));
+
+        let result = NoteData::from_numeric_duration(1920, 480);
+        assert_eq!(result, Some((NoteType::SemiBreve, false, None)));
+
+        let result = NoteData::from_numeric_duration(720, 480);
+        assert_eq!(result, Some((NoteType::Crochet, true, None)));
+
+        let result = NoteData::from_numeric_duration(96, 336);
+        assert_eq!(
+            result,
+            Some((
+                NoteType::Quaver,
+                false,
+                Some(TimeModification {
+                    actual_notes: 7,
+                    normal_notes: 4
+                })
+            ))
+        );
+
+        let result = NoteData::from_numeric_duration(112, 336);
+        assert_eq!(
+            result,
+            Some((
+                NoteType::Quaver,
+                false,
+                Some(TimeModification {
+                    actual_notes: 3,
+                    normal_notes: 2
+                })
+            ))
+        );
+    }
 
     #[test]
     fn test_tempo_into() {
