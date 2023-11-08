@@ -7,9 +7,13 @@ mod music_xml_types;
 mod notation;
 mod utils;
 mod xml_to_bin;
+mod measure_checker;
+mod xml_elem_handlers;
+mod xml_multipart;
 
-use crate::bin_to_xml::process_bin_to_xml;
 use crate::error::Error;
+use crate::bin_to_xml::process_bin_to_xml;
+use crate::xml_multipart::process_xml_multipart;
 use crate::xml_to_bin::process_xml_to_bin;
 use env_logger::Env;
 use std::path::PathBuf;
@@ -22,6 +26,8 @@ enum Mode {
     Xml2Bin,
     #[structopt(name = "bin2xml")]
     Bin2Xml,
+    #[structopt(name = "xmlmulti")]
+    XmlMultiPart,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -59,9 +65,14 @@ fn main() -> Result<(), Error> {
         Some(Mode::Bin2Xml) => {
             process_bin_to_xml(cli_opt.input, cli_opt.output, cli_opt.dump_input)?;
         }
-        _ => {
-            // default case for either no subcommand or Xml2Bin is perform process_xml_to_bin
+        Some(Mode::XmlMultiPart) => {
+            process_xml_multipart(cli_opt.input, cli_opt.output, cli_opt.dump_input)?;
+        }
+        Some(Mode::Xml2Bin) => {
             process_xml_to_bin(cli_opt.input, cli_opt.output, cli_opt.dump_input)?;
+        }
+        None => {
+            println!("No command mode provided.")
         }
     }
     Ok(())
