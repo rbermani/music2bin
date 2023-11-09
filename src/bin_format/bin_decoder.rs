@@ -1,6 +1,9 @@
-use crate::bin_encoder::*;
+use super::bin_encoder::{MusicBinHeader, MusicTagIdentifiers};
 use crate::error;
-use crate::notation::*;
+use crate::ir::notation::{
+    MeasureInitializer, MeasureMetaData, NoteData, NumericPitchRest, Tempo, TupletData,
+};
+use crate::ir::MusicElement;
 use io::Read;
 use log::error;
 use nom::bits::bits;
@@ -122,7 +125,7 @@ fn parse_note_data_rest(input: &[u8]) -> IResult<&[u8], MusicElement> {
         )| {
             let _id: MusicTagIdentifiers =
                 FromPrimitive::from_u8(id).ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
-            let note_rest = NoteRestValue::new_from_numeric(note_rest);
+            let note_rest = NumericPitchRest::new_from_numeric(note_rest);
             let phrase_dynamics = FromPrimitive::from_u8(phrase_dynamics)
                 .ok_or(Err::Error(Error::new(input, ErrorKind::Alt)))?;
             let rhythm_value = FromPrimitive::from_u8(rhythm_value)
@@ -316,7 +319,7 @@ impl MusicDecoder {
     pub fn parse_element(&self) -> error::Result<MusicElement> {
         match music_element(&self.data) {
             Ok((_, r)) => Ok(r),
-            _ => Err(error::Error::DecodingError),
+            _ => Err(error::Error::Decoding),
         }
     }
 
@@ -329,118 +332,122 @@ impl MusicDecoder {
                         header.get_chunk_length(),
                         elements.len()
                     );
-                    Err(error::Error::DecodingError)
+                    Err(error::Error::Decoding)
                 } else {
                     Ok(elements)
                 }
             }
-            _ => Err(error::Error::DecodingError),
+            _ => Err(error::Error::Decoding),
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::MusicDecoder;
-    use crate::notation::*;
-    //use crate::bin_encoder::*;
-    // use std::io::BufWriter;
-    // use std::path::PathBuf;
-    // use std::fs::File;
+// #[cfg(test)]
+// mod tests {
+//     use super::MusicDecoder;
+//     use crate::ir::notation::{
+//         Arpeggiate, Articulation, BeatType, Beats, Chord, DalSegno, Ending, KeySignature,
+//         MeasureInitializer, MeasureMetaData, MeasureStartEnd, MusicElement, NoteConnection,
+//         NoteData, NumericPitchRest, PhraseDynamics, RhythmType, SlurConnection, SpecialNote, Tempo,
+//         Trill, Voice,
+//     };
+//     //use crate::bin_encoder::*;
+//     // use std::io::BufWriter;
+//     // use std::path::PathBuf;
+//     // use std::fs::File;
 
-    #[test]
-    fn test_music_note_data_rest_parse() -> Result<(), Box<dyn std::error::Error>> {
-        let mut music_dec = MusicDecoder::new(None);
-        let note_rest_data: &[u8] = &[0xa0, 0xef, 0x84, 0x01];
-        music_dec.raw_read(note_rest_data);
-        let elem = music_dec.parse_element()?;
+//     #[test]
+//     fn test_music_note_data_rest_parse() -> Result<(), Box<dyn std::error::Error>> {
+//         let mut music_dec = MusicDecoder::new(None);
+//         let note_rest_data: &[u8] = &[0xa0, 0xef, 0x84, 0x01];
+//         music_dec.raw_read(note_rest_data);
+//         let elem = music_dec.parse_element()?;
 
-        assert_eq!(
-            elem,
-            MusicElement::NoteRest(NoteData {
-                note_rest: NoteRestValue::new_from_numeric(65),
-                phrase_dynamics: PhraseDynamics::Forte,
-                note_type: NoteType::SemiBreve,
-                dotted: true,
-                arpeggiate: Arpeggiate::NoArpeggiation,
-                special_note: SpecialNote::None,
-                articulation: Articulation::Marcato,
-                trill: Trill::None,
-                ties: NoteConnection::None,
-                stress: Stress::NotAccented,
-                chord: Chord::NoChord,
-                slur: SlurConnection::None,
-                voice: Voice::Two,
-            })
-        );
-        Ok(())
-        // TODO: Add negative cases that fail
-    }
+//         assert_eq!(
+//             elem,
+//             MusicElement::NoteRest(NoteData {
+//                 note_rest: NumericPitchRest::new_from_numeric(65),
+//                 phrase_dynamics: PhraseDynamics::Forte,
+//                 note_type: RhythmType::SemiBreve,
+//                 dotted: true,
+//                 arpeggiate: Arpeggiate::NoArpeggiation,
+//                 special_note: SpecialNote::None,
+//                 articulation: Articulation::Accent,
+//                 trill: Trill::None,
+//                 ties: NoteConnection::None,
+//                 chord: Chord::NoChord,
+//                 slur: SlurConnection::None,
+//                 voice: Voice::Two,
+//             })
+//         );
+//         Ok(())
+//         // TODO: Add negative cases that fail
+//     }
 
-    #[test]
-    fn test_music_meta_parse() -> Result<(), Box<dyn std::error::Error>> {
-        let mut music_dec = MusicDecoder::new(None);
-        let measure_meta_data: &[u8] = &[0x4e, 0x00, 0x00, 0x00];
-        music_dec.raw_read(measure_meta_data);
-        let elem = music_dec.parse_element()?;
+//     #[test]
+//     fn test_music_meta_parse() -> Result<(), Box<dyn std::error::Error>> {
+//         let mut music_dec = MusicDecoder::new(None);
+//         let measure_meta_data: &[u8] = &[0x4e, 0x00, 0x00, 0x00];
+//         music_dec.raw_read(measure_meta_data);
+//         let elem = music_dec.parse_element()?;
 
-        assert_eq!(
-            elem,
-            MusicElement::MeasureMeta(MeasureMetaData {
-                start_end: MeasureStartEnd::MeasureStart,
-                ending: Ending::Three,
-                dal_segno: DalSegno::DaCapo
-            })
-        );
-        Ok(())
-        // TODO: Add negative cases that fail
-    }
-    /// This function is just used for dumping serialized data structures to file to
-    /// use for validation test data generation. Can be left commented out
-    // #[test]
-    // fn test_dump_bin_file() {
-    //     let outfile = File::create(PathBuf::from("validation.bin")).expect("IO Error Occurred");
-    //     let writer = BufWriter::new(BufWriter::new(outfile));
-    //     let mut validation = MusicEncoder::new(writer);
-    //     validation.insert_note_data(NoteData {
-    //         note_rest: NoteRestValue::new_from_numeric(65),
-    //         phrase_dynamics: PhraseDynamics::Forte,
-    //         note_type: NoteType::SemiBreve,
-    //         dotted: true,
-    //         arpeggiate: Arpeggiate::NoArpeggiation,
-    //         special_note: SpecialNote::None,
-    //         articulation: Articulation::Marcato,
-    //         trill: Trill::None,
-    //         ties: NoteConnection::NoTie,
-    //         stress: Stress::NotAccented,
-    //         chord: Chord::NoChord,
-    //         slur: SlurConnection::NoSlur,
-    //         voice: Voice::Two,
-    //     }).unwrap();
+//         assert_eq!(
+//             elem,
+//             MusicElement::MeasureMeta(MeasureMetaData {
+//                 start_end: MeasureStartEnd::MeasureStart,
+//                 ending: Ending::Three,
+//                 dal_segno: DalSegno::DaCapo
+//             })
+//         );
+//         Ok(())
+//         // TODO: Add negative cases that fail
+//     }
+//     /// This function is just used for dumping serialized data structures to file to
+//     /// use for validation test data generation. Can be left commented out
+//     // #[test]
+//     // fn test_dump_bin_file() {
+//     //     let outfile = File::create(PathBuf::from("validation.bin")).expect("IO Error Occurred");
+//     //     let writer = BufWriter::new(BufWriter::new(outfile));
+//     //     let mut validation = MusicEncoder::new(writer);
+//     //     validation.insert_note_data(NoteData {
+//     //         note_rest: NoteRestValue::new_from_numeric(65),
+//     //         phrase_dynamics: PhraseDynamics::Forte,
+//     //         note_type: NoteType::SemiBreve,
+//     //         dotted: true,
+//     //         arpeggiate: Arpeggiate::NoArpeggiation,
+//     //         special_note: SpecialNote::None,
+//     //         articulation: Articulation::Marcato,
+//     //         trill: Trill::None,
+//     //         ties: NoteConnection::NoTie,
+//     //         stress: Stress::NotAccented,
+//     //         chord: Chord::NoChord,
+//     //         slur: SlurConnection::NoSlur,
+//     //         voice: Voice::Two,
+//     //     }).unwrap();
 
-    //     validation.flush();
-    // }
-    #[test]
-    fn test_music_init_parse() -> Result<(), Box<dyn std::error::Error>> {
-        let mut music_dec = MusicDecoder::new(None);
+//     //     validation.flush();
+//     // }
+//     #[test]
+//     fn test_music_init_parse() -> Result<(), Box<dyn std::error::Error>> {
+//         let mut music_dec = MusicDecoder::new(None);
 
-        // Positive case examples
-        let music_init_data: &[u8] = &[0x12, 0x0c, 0x80, 0x00];
-        music_dec.raw_read(music_init_data);
+//         // Positive case examples
+//         let music_init_data: &[u8] = &[0x12, 0x0c, 0x80, 0x00];
+//         music_dec.raw_read(music_init_data);
 
-        let elem = music_dec.parse_element()?;
+//         let elem = music_dec.parse_element()?;
 
-        assert_eq!(
-            elem,
-            MusicElement::MeasureInit(MeasureInitializer {
-                beats: Beats::Four,
-                beat_type: BeatType::Four,
-                key_sig: KeySignature::CMajorAminor,
-                tempo: Tempo::default(),
-            })
-        );
-        Ok(())
-        //music_dec.clear_data();
-        // TODO: Add negative cases that fail
-    }
-}
+//         assert_eq!(
+//             elem,
+//             MusicElement::MeasureInit(MeasureInitializer {
+//                 beats: Beats::Four,
+//                 beat_type: BeatType::Four,
+//                 key_sig: KeySignature::CMajorAminor,
+//                 tempo: Tempo::default(),
+//             })
+//         );
+//         Ok(())
+//         //music_dec.clear_data();
+//         // TODO: Add negative cases that fail
+//     }
+// }

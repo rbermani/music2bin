@@ -1,6 +1,9 @@
+use super::notation::{
+    BeatType, Beats, Chord, MeasureInitializer, MusicElement, NoteData, SpecialNote,
+    TimeModification, Voice,
+};
 use log::{error, info, trace, warn};
 use num::integer::lcm;
-use crate::notation::{MusicElement, Beats, BeatType, MeasureInitializer, TimeModification, NoteData, Voice, Chord, SpecialNote};
 use num_traits::FromPrimitive;
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -12,7 +15,9 @@ pub struct MeasureChecker {
     quarter_division: u32,
     beats: Beats,
     beat_type: BeatType,
+    part_str: String,
     measure_idx: usize,
+    forward_duration: usize,
 }
 
 impl MeasureChecker {
@@ -20,7 +25,9 @@ impl MeasureChecker {
     pub fn new(
         quarter_division: u32,
         measure_init: &MeasureInitializer,
+        part_str: &str,
         measure_idx: usize,
+        forward_duration: usize,
     ) -> MeasureChecker {
         MeasureChecker {
             measure: vec![],
@@ -28,7 +35,9 @@ impl MeasureChecker {
             quarter_division,
             beats: measure_init.beats,
             beat_type: measure_init.beat_type,
+            part_str: part_str.to_string(),
             measure_idx,
+            forward_duration,
         }
     }
 
@@ -50,6 +59,7 @@ impl MeasureChecker {
         // Backup elements are only inserted when voice changes happen.
         // Calculate duration to current point, since previous voice began, based on notes in the measure, and accounting for corresponding
         // time modifying elements
+        let actual_duration = backup_duration - self.forward_duration;
         let last_backup_idx = self.measure.len() - self.elems_since_backup;
         let mut time_mod: Option<TimeModification> = None;
         let mut current_voice = Voice::One;
@@ -82,11 +92,12 @@ impl MeasureChecker {
                 }
             })
             .sum();
+        //duration_since_backup -= self.forward_duration;
 
-        match backup_duration.cmp(&duration_since_backup) {
+        match actual_duration.cmp(&duration_since_backup) {
             Ordering::Less => {
-                let discrepancy = duration_since_backup - backup_duration;
-                println!("M{} duration tally {} did not match the backup element's duration {backup_duration}, qtr_div: {} inserting rests to accommodate {discrepancy} discrepancy.", self.measure_idx, duration_since_backup, self.quarter_division);
+                let discrepancy = duration_since_backup - actual_duration;
+                println!("{}M{} duration tally {} did not match the backup element's duration {actual_duration}, qtr_div: {} inserting rests to accommodate {discrepancy} discrepancy.", self.part_str.as_str(), self.measure_idx, duration_since_backup, self.quarter_division);
 
                 match NoteData::from_numeric_duration(discrepancy as u32, self.quarter_division) {
                     Some((duration, is_dotted, time_mod)) => {
@@ -112,7 +123,7 @@ impl MeasureChecker {
             Ordering::Greater => {
                 info!(
                     "Backup_duration {} was > duration_since_backup {} Assuming beginning of measure",
-                    backup_duration, duration_since_backup
+                    actual_duration, duration_since_backup
                 );
             }
             Ordering::Equal => {
@@ -144,11 +155,14 @@ impl MeasureChecker {
                 Self::MAX_SUPPORTED_VOICES
             );
         }
+
         let mut time_mod = None;
         let mut prev_voice = 0;
-        // TODO: enumerate the iterator and create mapping of the last element of each voice
-        // so a rest can be inserted at that location later if the voice duration is insufficient
+
         for (idx, elem) in self.measure.iter().cloned().enumerate() {
+            // if self.measure_idx == 68 {
+            // println!("{:?}", elem);
+            // }
             match elem {
                 MusicElement::Tuplet(t) => time_mod = t.into(),
                 MusicElement::NoteRest(n) => {
@@ -162,8 +176,10 @@ impl MeasureChecker {
                         )
                     }
                     if n.voice as usize > prev_voice {
-                        voice_last_idx[n.voice as usize] = idx - 1;
+                        //The voice number of this element is higher than the previous element's voice, store previous index
+                        voice_last_idx[prev_voice] = idx - 1;
                     }
+
                     prev_voice = n.voice as usize;
                 }
                 _ => {
@@ -171,24 +187,29 @@ impl MeasureChecker {
                 }
             }
         }
+        // if self.measure_idx == 68 {
+        //         println!("voice_durations: {:?}", voice_durations);
+        // }
 
         let first_voice_duration = voice_durations[0];
         for (voice_idx, _) in voices.iter().enumerate() {
+            //println!("voice {} duration {}", voice_idx, voice_durations[voice_idx]);
             if voice_durations[voice_idx] != 0 && voice_durations[voice_idx] < first_voice_duration
             {
                 let discrepancy = first_voice_duration - voice_durations[voice_idx];
                 println!(
-                    "M{} Voice Zero: {first_voice_duration} duration Voice {voice_idx}: {} duration {} discrepancy", self.measure_idx,
+                    "{}M{} Voice Zero: {first_voice_duration} duration Voice {voice_idx}: {} duration {} discrepancy", self.part_str.as_str(), self.measure_idx,
                     voice_durations[voice_idx],discrepancy
                 );
                 // insert rest of discrepancy length at index at measure[voice_last_idx[voice_idx]]
+                println!("Inserting rest due to voice length incorrect.");
                 if let Some((duration, is_dotted, time_mod)) =
                     NoteData::from_numeric_duration(discrepancy, self.quarter_division)
                 {
                     if time_mod.is_some() {
                         warn!("time modification for rest is present, but not being used.")
                     }
-                    // The new rest should begin on the next voice after the current one.
+                    // The new rest should begin on the current voice to correct the total duration.
                     self.measure.insert(
                         voice_last_idx[voice_idx],
                         MusicElement::NoteRest(NoteData::new_default_rest(
@@ -230,6 +251,7 @@ impl DivisionsVec {
     }
 
     // Allow direct access to the inner Vec<u32>
+    #[allow(dead_code)]
     pub fn inner(&self) -> &Vec<u32> {
         &self.inner
     }

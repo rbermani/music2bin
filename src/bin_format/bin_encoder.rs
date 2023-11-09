@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::notation::*;
+use crate::ir::notation::*;
 use bitfield::bitfield;
 use io::Write;
 use num_derive::FromPrimitive;

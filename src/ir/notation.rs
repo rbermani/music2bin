@@ -1,9 +1,12 @@
 use crate::error::{Error, Result};
-use crate::music_xml_types::{TimeModificationElement, TupletElement, TupletType, ArticulationValue};
-use log::error;
 use fraction::Fraction;
+use log::error;
+use mulib::pitch::{AccidentalSpelling, Alter, PitchOctave};
+use muxml::muxml_types::{
+    ChordElement, DotElement, DynamicsValue, GraceElement, NotationsElement, NoteElement,
+    PitchElement, PitchRest, TimeModificationElement,
+};
 use num_derive::FromPrimitive;
-use num_traits::FromPrimitive;
 use std::convert::From;
 use std::str::FromStr;
 use strum::{EnumCount, EnumIter};
@@ -12,27 +15,6 @@ use strum::{EnumCount, EnumIter};
 pub struct TimeModification {
     actual_notes: TupletActual,
     normal_notes: TupletNormal,
-}
-
-fn convert_time_modification(t_mod: &TimeModificationElement) -> TimeModification {
-    let tup_ac = TupletActual::try_from(t_mod.actual_notes.as_ref())
-        .expect("Cannot convert this TupletActual string.");
-    let tup_norm = TupletNormal::try_from(t_mod.normal_notes.as_ref())
-        .expect("Cannot convert this TupletNormal string.");
-
-    TimeModification::new(tup_ac, tup_norm)
-}
-
-impl From<TimeModificationElement> for TimeModification {
-    fn from(time_mod_elem: TimeModificationElement) -> Self {
-        convert_time_modification(&time_mod_elem)
-    }
-}
-
-impl From<&TimeModificationElement> for TimeModification {
-    fn from(time_mod_elem: &TimeModificationElement) -> Self {
-        convert_time_modification(time_mod_elem)
-    }
 }
 
 impl TimeModification {
@@ -47,60 +29,6 @@ impl TimeModification {
     }
     pub fn get_normal(&self) -> TupletNormal {
         self.normal_notes
-    }
-}
-#[derive(Copy, FromPrimitive, Clone)]
-#[repr(u8)]
-pub enum Note {
-    NoteC = 49,
-    NoteCsharp = 50,
-    NoteD = 51,
-    NoteDsharp = 52,
-    NoteE = 53,
-    NoteF = 54,
-    NoteFsharp = 55,
-    NoteG = 56,
-    NoteGsharp = 57,
-    NoteA = 58,
-    NoteAsharp = 59,
-    NoteB = 60,
-}
-
-impl Note {
-    pub fn get_note_alter_tuple(self) -> (Note, Alter) {
-        match self {
-            Self::NoteC => (Self::NoteC, Alter::None),
-            Self::NoteCsharp => (Self::NoteC, Alter::Sharp),
-            Self::NoteD => (Self::NoteD, Alter::None),
-            Self::NoteDsharp => (Self::NoteD, Alter::Sharp),
-            Self::NoteE => (Self::NoteE, Alter::None),
-            Self::NoteF => (Self::NoteF, Alter::None),
-            Self::NoteFsharp => (Self::NoteF, Alter::Sharp),
-            Self::NoteG => (Self::NoteG, Alter::None),
-            Self::NoteGsharp => (Self::NoteG, Alter::Sharp),
-            Self::NoteA => (Self::NoteA, Alter::None),
-            Self::NoteAsharp => (Self::NoteA, Alter::Sharp),
-            Self::NoteB => (Self::NoteB, Alter::None),
-        }
-    }
-}
-
-impl ToString for Note {
-    fn to_string(&self) -> String {
-        match self {
-            Self::NoteC => String::from("C"),
-            Self::NoteCsharp => String::from("C#"),
-            Self::NoteD => String::from("D"),
-            Self::NoteDsharp => String::from("D#"),
-            Self::NoteE => String::from("E"),
-            Self::NoteF => String::from("F"),
-            Self::NoteFsharp => String::from("F#"),
-            Self::NoteG => String::from("G"),
-            Self::NoteGsharp => String::from("G#"),
-            Self::NoteA => String::from("A"),
-            Self::NoteAsharp => String::from("A#"),
-            Self::NoteB => String::from("B"),
-        }
     }
 }
 
@@ -165,87 +93,6 @@ impl FromStr for KeySignature {
     }
 }
 
-#[derive(Copy, Clone, FromPrimitive)]
-#[repr(u8)]
-pub enum Octave {
-    Octave0 = 0,
-    Octave1 = 1,
-    Octave2 = 2,
-    Octave3 = 3,
-    Octave4 = 4,
-    Octave5 = 5,
-    Octave6 = 6,
-    Octave7 = 7,
-    Octave8 = 8,
-}
-
-#[derive(PartialEq, Eq, Copy, Clone)]
-#[repr(i8)]
-pub enum Alter {
-    Flat = -1,
-    None = 0,
-    Sharp = 1,
-    DoubleSharp = 2,
-}
-
-impl FromStr for Alter {
-    type Err = Error;
-    fn from_str(input: &str) -> Result<Alter> {
-        match input {
-            "-1" => Ok(Alter::Flat),
-            "0" => Ok(Alter::None),
-            "1" => Ok(Alter::Sharp),
-            "2" => Ok(Alter::DoubleSharp),
-            _ => Err(Error::Unit),
-        }
-    }
-}
-
-impl ToString for Alter {
-    fn to_string(&self) -> String {
-        match self {
-            Alter::Flat => String::from("-1"),
-            Alter::None => String::from("0"),
-            Alter::Sharp => String::from("1"),
-            Alter::DoubleSharp => String::from("2"),
-        }
-    }
-}
-
-impl FromStr for Octave {
-    type Err = Error;
-    fn from_str(input: &str) -> Result<Octave> {
-        match input {
-            "0" => Ok(Octave::Octave0),
-            "1" => Ok(Octave::Octave1),
-            "2" => Ok(Octave::Octave2),
-            "3" => Ok(Octave::Octave3),
-            "4" => Ok(Octave::Octave4),
-            "5" => Ok(Octave::Octave5),
-            "6" => Ok(Octave::Octave6),
-            "7" => Ok(Octave::Octave7),
-            "8" => Ok(Octave::Octave8),
-            _ => Err(Error::Unit),
-        }
-    }
-}
-
-impl FromStr for Note {
-    type Err = Error;
-    fn from_str(input: &str) -> Result<Note> {
-        match input {
-            "C" => Ok(Note::NoteC),
-            "D" => Ok(Note::NoteD),
-            "E" => Ok(Note::NoteE),
-            "F" => Ok(Note::NoteF),
-            "G" => Ok(Note::NoteG),
-            "A" => Ok(Note::NoteA),
-            "B" => Ok(Note::NoteB),
-            _ => Err(Error::Unit),
-        }
-    }
-}
-
 #[derive(Eq, PartialEq, Copy, Clone, FromPrimitive, Default, Debug)]
 #[repr(u8)]
 pub enum NoteConnection {
@@ -303,26 +150,11 @@ pub enum Articulation {
     None,
     Accent,
     StrongAccent,
-    Stacatto,
+    Staccato,
     Staccatissimo,
     Tenuto,
     DetachedLegato,
     Stress,
-}
-
-impl From<Articulation> for ArticulationValue {
-    fn from(t: Articulation) -> Self {
-        match t {
-            Articulation::None => ArticulationValue::None,
-            Articulation::Accent => ArticulationValue::Accent,
-            Articulation::StrongAccent => ArticulationValue::StrongAccent,
-            Articulation::Stacatto => ArticulationValue::Stacatto,
-            Articulation::Staccatissimo => ArticulationValue::Staccatissimo,
-            Articulation::Tenuto => ArticulationValue::Tenuto,
-            Articulation::DetachedLegato => ArticulationValue::DetachedLegato,
-            Articulation::Stress => ArticulationValue::Stress,
-        }
-    }
 }
 
 impl ToString for Articulation {
@@ -331,7 +163,7 @@ impl ToString for Articulation {
             Articulation::None => "".to_string(),
             Articulation::Accent => "accent".to_string(),
             Articulation::StrongAccent => "strong-accent".to_string(),
-            Articulation::Stacatto => "staccato".to_string(),
+            Articulation::Staccato => "staccato".to_string(),
             Articulation::Staccatissimo => "staccatissimo".to_string(),
             Articulation::Tenuto => "tenuto".to_string(),
             Articulation::DetachedLegato => "detached-legato".to_string(),
@@ -346,7 +178,7 @@ impl FromStr for Articulation {
         match input {
             "accent" => Ok(Articulation::Accent),
             "strong-accent" => Ok(Articulation::StrongAccent),
-            "staccato" => Ok(Articulation::Stacatto),
+            "staccato" => Ok(Articulation::Staccato),
             "tenuto" => Ok(Articulation::Tenuto),
             "detached-legato" => Ok(Articulation::DetachedLegato),
             "staccatissimo" => Ok(Articulation::Staccatissimo),
@@ -685,32 +517,6 @@ pub struct TupletData {
     pub dotted: TupletDotted,
 }
 
-impl From<TupletData> for Option<TupletElement> {
-    fn from(t: TupletData) -> Self {
-        match t.start_stop {
-            TupletStartStop::TupletStart => Some(TupletElement {
-                r#type: TupletType::Start,
-                number: t.tuplet_number.to_string(),
-            }),
-            TupletStartStop::None => None,
-            TupletStartStop::TupletStop => None,
-        }
-    }
-}
-
-impl From<TupletData> for Option<TimeModificationElement> {
-    fn from(t: TupletData) -> Self {
-        match t.start_stop {
-            TupletStartStop::TupletStart => Some(TimeModificationElement {
-                actual_notes: t.actual_notes.into(),
-                normal_notes: t.normal_notes.into(),
-            }),
-            TupletStartStop::None => None,
-            TupletStartStop::TupletStop => None,
-        }
-    }
-}
-
 impl From<TupletData> for Option<TimeModification> {
     fn from(t: TupletData) -> Self {
         match t.start_stop {
@@ -803,6 +609,23 @@ impl FromStr for PhraseDynamics {
                 println!("Dynamic type {}", s);
                 Err(Error::Parse)
             }
+        }
+    }
+}
+
+impl From<PhraseDynamics> for Option<DynamicsValue> {
+    fn from(dynamics: PhraseDynamics) -> Option<DynamicsValue> {
+        match dynamics {
+            PhraseDynamics::None => None,
+            PhraseDynamics::Pianississimo => Some(DynamicsValue::Ppp),
+            PhraseDynamics::Pianissimo => Some(DynamicsValue::Pp),
+            PhraseDynamics::Piano => Some(DynamicsValue::P),
+            PhraseDynamics::Forte => Some(DynamicsValue::F),
+            PhraseDynamics::Fortissimo => Some(DynamicsValue::Ff),
+            PhraseDynamics::Fortississimo => Some(DynamicsValue::Fff),
+            PhraseDynamics::MezzoPiano => Some(DynamicsValue::Mp),
+            PhraseDynamics::MezzoForte => Some(DynamicsValue::Mf),
+            _ => Some(DynamicsValue::P),
         }
     }
 }
@@ -1050,7 +873,7 @@ pub enum DalSegno {
 
 #[derive(Eq, PartialEq, PartialOrd, Ord, Copy, Clone, FromPrimitive, Default, Debug)]
 #[repr(u8)]
-pub enum NoteType {
+pub enum RhythmType {
     SemiHemiDemiSemiQuaver,
     HemiDemiSemiQuaver,
     DemiSemiQuaver,
@@ -1062,19 +885,19 @@ pub enum NoteType {
     SemiBreve,
 }
 
-impl FromStr for NoteType {
+impl FromStr for RhythmType {
     type Err = Error;
-    fn from_str(input: &str) -> Result<NoteType> {
+    fn from_str(input: &str) -> Result<RhythmType> {
         match input {
-            "breve" => Ok(NoteType::SemiBreve),
-            "whole" => Ok(NoteType::SemiBreve),
-            "half" => Ok(NoteType::Minim),
-            "quarter" => Ok(NoteType::Crochet),
-            "eighth" => Ok(NoteType::Quaver),
-            "16th" => Ok(NoteType::SemiQuaver),
-            "32nd" => Ok(NoteType::DemiSemiQuaver),
-            "64th" => Ok(NoteType::HemiDemiSemiQuaver),
-            "128th" => Ok(NoteType::SemiHemiDemiSemiQuaver),
+            "breve" => Ok(RhythmType::SemiBreve),
+            "whole" => Ok(RhythmType::SemiBreve),
+            "half" => Ok(RhythmType::Minim),
+            "quarter" => Ok(RhythmType::Crochet),
+            "eighth" => Ok(RhythmType::Quaver),
+            "16th" => Ok(RhythmType::SemiQuaver),
+            "32nd" => Ok(RhythmType::DemiSemiQuaver),
+            "64th" => Ok(RhythmType::HemiDemiSemiQuaver),
+            "128th" => Ok(RhythmType::SemiHemiDemiSemiQuaver),
             s => {
                 error!("Unhandled Note type {}", s);
                 Err(Error::Parse)
@@ -1083,17 +906,17 @@ impl FromStr for NoteType {
     }
 }
 
-impl NoteType {
+impl RhythmType {
     pub fn get_type_string(self) -> String {
         match self {
-            NoteType::SemiHemiDemiSemiQuaver => String::from("128th"),
-            NoteType::HemiDemiSemiQuaver => String::from("64th"),
-            NoteType::DemiSemiQuaver => String::from("32nd"),
-            NoteType::SemiQuaver => String::from("16th"),
-            NoteType::Quaver => String::from("eighth"),
-            NoteType::Crochet => String::from("quarter"),
-            NoteType::Minim => String::from("half"),
-            NoteType::SemiBreve => String::from("whole"),
+            RhythmType::SemiHemiDemiSemiQuaver => String::from("128th"),
+            RhythmType::HemiDemiSemiQuaver => String::from("64th"),
+            RhythmType::DemiSemiQuaver => String::from("32nd"),
+            RhythmType::SemiQuaver => String::from("16th"),
+            RhythmType::Quaver => String::from("eighth"),
+            RhythmType::Crochet => String::from("quarter"),
+            RhythmType::Minim => String::from("half"),
+            RhythmType::SemiBreve => String::from("whole"),
         }
     }
 }
@@ -1263,9 +1086,9 @@ impl MeasureMetaData {
 }
 #[derive(Eq, PartialEq, Default, Clone, Copy, Debug)]
 pub struct NoteData {
-    pub note_rest: NoteRestValue,
+    pub note_rest: NumericPitchRest,
     pub phrase_dynamics: PhraseDynamics,
-    pub note_type: NoteType,
+    pub note_type: RhythmType,
     pub dotted: bool,
     pub arpeggiate: Arpeggiate,
     pub special_note: SpecialNote,
@@ -1277,7 +1100,7 @@ pub struct NoteData {
     pub voice: Voice,
 }
 
-type IsDotted = bool;
+pub type IsDotted = bool;
 
 impl NoteData {
     const SEMIBREVE_DENOMINATOR: u32 = 1;
@@ -1300,9 +1123,9 @@ impl NoteData {
     const MIDI_TICKS_MINIM: u32 = Self::MIDI_TICKS_CROCHET * 2;
     const MIDI_TICKS_SEMIBREVE: u32 = Self::MIDI_TICKS_CROCHET * 4;
 
-    pub fn new_default_rest(note_type: NoteType, dotted: IsDotted, voice: Voice) -> NoteData {
+    pub fn new_default_rest(note_type: RhythmType, dotted: IsDotted, voice: Voice) -> NoteData {
         NoteData {
-            note_rest: NoteRestValue::Rest,
+            note_rest: NumericPitchRest::Rest,
             note_type,
             dotted,
             voice,
@@ -1318,14 +1141,14 @@ impl NoteData {
         }
 
         let mut denom = match self.note_type {
-            NoteType::SemiBreve => Self::SEMIBREVE_DENOMINATOR,
-            NoteType::Minim => Self::MINIM_DENOMINATOR,
-            NoteType::Crochet => Self::CROCHET_DENOMINATOR,
-            NoteType::Quaver => Self::QUAVER_DENOMINATOR,
-            NoteType::SemiQuaver => Self::SEMI_QUAVER_DENOMINATOR,
-            NoteType::DemiSemiQuaver => Self::DEMI_SEMI_QUAVER_DENOMINATOR,
-            NoteType::HemiDemiSemiQuaver => Self::HEMI_DEMI_SEMI_QUAVER_DENOMINATOR,
-            NoteType::SemiHemiDemiSemiQuaver => Self::SEMI_HEMI_DEMI_SEMI_QUAVER_DENOMINATOR,
+            RhythmType::SemiBreve => Self::SEMIBREVE_DENOMINATOR,
+            RhythmType::Minim => Self::MINIM_DENOMINATOR,
+            RhythmType::Crochet => Self::CROCHET_DENOMINATOR,
+            RhythmType::Quaver => Self::QUAVER_DENOMINATOR,
+            RhythmType::SemiQuaver => Self::SEMI_QUAVER_DENOMINATOR,
+            RhythmType::DemiSemiQuaver => Self::DEMI_SEMI_QUAVER_DENOMINATOR,
+            RhythmType::HemiDemiSemiQuaver => Self::HEMI_DEMI_SEMI_QUAVER_DENOMINATOR,
+            RhythmType::SemiHemiDemiSemiQuaver => Self::SEMI_HEMI_DEMI_SEMI_QUAVER_DENOMINATOR,
         };
 
         if self.dotted {
@@ -1362,17 +1185,19 @@ impl NoteData {
         }
 
         match self.note_type {
-            NoteType::SemiBreve => Self::MIDI_TICKS_SEMIBREVE * numerator / denominator,
-            NoteType::Minim => Self::MIDI_TICKS_MINIM * numerator / denominator,
-            NoteType::Crochet => Self::MIDI_TICKS_CROCHET * numerator / denominator,
-            NoteType::Quaver => Self::MIDI_TICKS_QUAVER * numerator / denominator,
-            NoteType::SemiQuaver => Self::MIDI_TICKS_SEMI_QUAVER * numerator / denominator,
-            NoteType::DemiSemiQuaver => Self::MIDI_TICKS_DEMI_SEMI_QUAVER * numerator / denominator,
-            NoteType::HemiDemiSemiQuaver => {
+            RhythmType::SemiBreve => Self::MIDI_TICKS_SEMIBREVE * numerator / denominator,
+            RhythmType::Minim => Self::MIDI_TICKS_MINIM * numerator / denominator,
+            RhythmType::Crochet => Self::MIDI_TICKS_CROCHET * numerator / denominator,
+            RhythmType::Quaver => Self::MIDI_TICKS_QUAVER * numerator / denominator,
+            RhythmType::SemiQuaver => Self::MIDI_TICKS_SEMI_QUAVER * numerator / denominator,
+            RhythmType::DemiSemiQuaver => {
+                Self::MIDI_TICKS_DEMI_SEMI_QUAVER * numerator / denominator
+            }
+            RhythmType::HemiDemiSemiQuaver => {
                 Self::MIDI_TICKS_HEMI_DEMI_SEMI_QUAVER * numerator / denominator
             }
 
-            NoteType::SemiHemiDemiSemiQuaver => {
+            RhythmType::SemiHemiDemiSemiQuaver => {
                 Self::MIDI_TICKS_SEMI_HEMI_DEMI_SEMI_QUAVER * numerator / denominator
             }
         }
@@ -1385,6 +1210,8 @@ impl NoteData {
         beat_type: u32,
         time_mods: Option<TimeModification>,
     ) -> u32 {
+        // chords should not contribute to the measure tally, but they must always
+        // replicate the duration of their previous element
         if self.special_note != SpecialNote::None {
             // Some notes have no duration
             return 0;
@@ -1407,17 +1234,17 @@ impl NoteData {
         }
 
         match self.note_type {
-            NoteType::SemiHemiDemiSemiQuaver => (divisions * numerator / 32) / denominator,
-            NoteType::HemiDemiSemiQuaver => (divisions * numerator / 16) / denominator,
-            NoteType::DemiSemiQuaver => (divisions * numerator / 8) / denominator,
-            NoteType::SemiQuaver => (divisions * numerator / 4) / denominator,
-            NoteType::Quaver => (divisions * numerator / 2) / denominator,
-            NoteType::Crochet => (divisions * numerator) / denominator,
-            NoteType::Minim => (divisions * 2 * numerator) / denominator,
-            NoteType::SemiBreve => {
+            RhythmType::SemiHemiDemiSemiQuaver => (divisions * numerator / 32) / denominator,
+            RhythmType::HemiDemiSemiQuaver => (divisions * numerator / 16) / denominator,
+            RhythmType::DemiSemiQuaver => (divisions * numerator / 8) / denominator,
+            RhythmType::SemiQuaver => (divisions * numerator / 4) / denominator,
+            RhythmType::Quaver => (divisions * numerator / 2) / denominator,
+            RhythmType::Crochet => (divisions * numerator) / denominator,
+            RhythmType::Minim => (divisions * 2 * numerator) / denominator,
+            RhythmType::SemiBreve => {
                 // The duration of a semi breve rest can differ based on time signature.
                 // For example, in 4/4, it would be 4 crochets, but in 3/4, only 3 crochets
-                if self.note_rest == NoteRestValue::Rest {
+                if self.note_rest == NumericPitchRest::Rest {
                     ((divisions * numerator * beats * 10) / (beat_type * 10)) / denominator
                 } else {
                     (divisions * 4 * numerator) / denominator
@@ -1437,7 +1264,7 @@ impl NoteData {
             .to_string()
     }
 
-    /// Converts a numeric duration to its corresponding musical `Duration` and `IsDotted` representation.
+    /// Converts a numeric duration to its corresponding musical `NoteType` and `IsDotted` representation.
     ///
     /// # Arguments
     ///
@@ -1446,34 +1273,34 @@ impl NoteData {
     ///
     /// # Returns
     ///
-    /// Returns an `Option` containing a tuple of `Duration` and `IsDotted` if the `numeric_duration`
+    /// Returns an `Option` containing a tuple of `NoteType` and `IsDotted` if the `numeric_duration`
     /// matches a standard musical note duration. Returns `None` if the `numeric_duration` doesn't fit
     /// standard note values.
     ///
     /// # Examples
     ///
     /// ```
-    /// # use your_crate_name::{Duration, IsDotted, from_numeric_duration};
+    /// # use muxml::ir::notation::{NoteType, IsDotted, from_numeric_duration};
     /// let divisions = 480;
     /// let numeric = 720;
     ///
     /// assert_eq!(
     ///     from_numeric_duration(numeric, divisions),
-    ///     Some((Duration::QuarterNote, IsDotted::Dotted))
+    ///     Some((NoteType::QuarterNote, IsDotted::Dotted))
     /// );
     pub fn from_numeric_duration(
         numeric_duration: u32,
         quarter_division: u32,
-    ) -> Option<(NoteType, IsDotted, Option<TimeModification>)> {
+    ) -> Option<(RhythmType, IsDotted, Option<TimeModification>)> {
         let note_types = [
-            NoteType::SemiBreve,
-            NoteType::Minim,
-            NoteType::Crochet,
-            NoteType::Quaver,
-            NoteType::SemiQuaver,
-            NoteType::DemiSemiQuaver,
-            NoteType::HemiDemiSemiQuaver,
-            NoteType::SemiHemiDemiSemiQuaver,
+            RhythmType::SemiBreve,
+            RhythmType::Minim,
+            RhythmType::Crochet,
+            RhythmType::Quaver,
+            RhythmType::SemiQuaver,
+            RhythmType::DemiSemiQuaver,
+            RhythmType::HemiDemiSemiQuaver,
+            RhythmType::SemiHemiDemiSemiQuaver,
         ];
 
         let is_dotted = |base: u32, duration| (3 * base) / 2 == duration;
@@ -1550,189 +1377,289 @@ impl NoteData {
         Some((note_type, false, tuplet_representation))
     }
 }
+
+// The pitches in the binary format are the equivalent MIDI pitch numbers minus an offset of 11. MIDI Note 108 corresponds to 97 in this format. Note 12 -> 1
+// The PitchOctave type from music lib uses the MIDI note number values
 #[derive(Eq, PartialEq, Default, Clone, Copy, Debug)]
 #[repr(u8)]
-pub enum NoteRestValue {
+pub enum NumericPitchRest {
     #[default]
     Rest = 0,
     Pitch(u8),
 }
 
-impl NoteRestValue {
+impl NumericPitchRest {
     const MAX_NOTE_VALUE: i8 = 97;
     const MIN_NOTE_VALUE: i8 = 1;
     const REST_VALUE: u8 = 0;
+    const MIDI_NOTE_OFFSET: i8 = 11;
 
-    fn get_octave(self) -> Option<Octave> {
-        match self {
-            NoteRestValue::Rest => None,
-            NoteRestValue::Pitch(v) => {
-                let num = (v - 1) / 12;
-                FromPrimitive::from_u8(num)
-            }
-        }
-    }
+    // fn get_octave(self) -> Option<Octave> {
+    //     match self {
+    //         NumericPitchRest::Rest => None,
+    //         NumericPitchRest::Pitch(v) => {
+    //             let num = (v - 1) / 12;
+    //             FromPrimitive::from_u8(num)
+    //         }
+    //     }
+    // }
 
-    pub fn new_from_numeric(note_val: u8) -> NoteRestValue {
+    pub fn new_from_numeric(note_val: u8) -> Self {
         if note_val == 0 {
-            NoteRestValue::Rest
+            NumericPitchRest::Rest
         } else {
-            NoteRestValue::Pitch(note_val)
+            NumericPitchRest::Pitch(note_val)
         }
     }
     /// Encodes note data into numerical form for embedding. Supported note range is C0 to C8
     ///
     /// # Arguments
     ///
-    /// * `note`  -  An enum indicating the step of the 12 tone equal temperament diatonic scale
-    /// * `alter` -  An enum indicating if note should be unchanged, flatted, or sharped
-    /// * `octave` - An enum indicating the octave from 0 to 8
-    ///
-    pub fn derive_numeric_note(note: Note, alter: Alter, octave: Octave) -> Result<NoteRestValue> {
-        let mut numeric_note = note as i8;
-        let numeric_alter = alter as i8;
-        let numeric_octave = octave as i8;
+    /// * `pitch_octave`  -  Contains diatonic step, note accidental alterations, and octave
+    pub fn from_pitch_octave(pitch_octave: PitchOctave) -> Result<NumericPitchRest> {
+        let midi_numeric = i8::from(pitch_octave.pitch.step);
+        let mut numeric_note = midi_numeric - Self::MIDI_NOTE_OFFSET;
+        let numeric_alter = i8::from(pitch_octave.pitch.alter);
+        let numeric_octave = pitch_octave.octave as i8; // MIDI C3 corresponds to C4 in MusicXML
 
         numeric_note += numeric_alter;
         numeric_note += (numeric_octave - 4) * 12;
+        //println!("midi_numeric: {midi_numeric} numeric_octave: {numeric_octave}, numeric: {numeric_note}");
         if !(Self::MIN_NOTE_VALUE..=Self::MAX_NOTE_VALUE).contains(&numeric_note) {
             Err(Error::OutofBounds)
         } else {
-            Ok(NoteRestValue::Pitch(numeric_note as u8))
+            Ok(NumericPitchRest::Pitch(numeric_note as u8))
         }
     }
 
-    pub fn decode_composite_note(self) -> Option<(Note, Alter, Octave)> {
-        if let Some(octave) = self.get_octave() {
-            match self {
-                NoteRestValue::Rest => None,
-                NoteRestValue::Pitch(v) => {
-                    let oct_u8 = octave as u8;
-                    let note_numeric = (v as i32) - (((oct_u8 as i32) - 4) * 12);
-                    let note: Option<Note> = FromPrimitive::from_u8(note_numeric as u8);
-                    match note {
-                        None => None,
-                        Some(n) => {
-                            let (somenote, somealter) = n.get_note_alter_tuple();
-                            Some((somenote, somealter, octave))
-                        }
-                    }
-                }
+    pub fn get_pitch_octave(self) -> Option<PitchOctave> {
+        match self {
+            NumericPitchRest::Rest => None,
+            NumericPitchRest::Pitch(v) => {
+                let midi_note_numeric = (v as i8) + Self::MIDI_NOTE_OFFSET;
+                Some(
+                    PitchOctave::new_from_semitone(midi_note_numeric, AccidentalSpelling::Sharp)
+                        .ok()?,
+                )
             }
-        } else {
-            None
         }
     }
 
     pub fn get_numeric_value(self) -> u8 {
         match self {
-            NoteRestValue::Rest => NoteRestValue::REST_VALUE,
-            NoteRestValue::Pitch(v) => v,
+            NumericPitchRest::Rest => NumericPitchRest::REST_VALUE,
+            NumericPitchRest::Pitch(v) => v,
+        }
+    }
+    pub fn get_midi_numeric_pitch_value(self) -> Option<u8> {
+        match self {
+            NumericPitchRest::Rest => None,
+            NumericPitchRest::Pitch(v) => Some(v + 11),
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_from_numeric_duration() {
-        let result = NoteData::from_numeric_duration(36, 24);
-        assert_eq!(result, Some((NoteType::Crochet, true, None)));
-
-        let result = NoteData::from_numeric_duration(1440, 480);
-        assert_eq!(result, Some((NoteType::Minim, true, None)));
-
-        let result = NoteData::from_numeric_duration(1920, 480);
-        assert_eq!(result, Some((NoteType::SemiBreve, false, None)));
-
-        let result = NoteData::from_numeric_duration(720, 480);
-        assert_eq!(result, Some((NoteType::Crochet, true, None)));
-
-        let result = NoteData::from_numeric_duration(96, 336);
-        assert_eq!(
-            result,
-            Some((
-                NoteType::Quaver,
-                false,
-                Some(TimeModification {
-                    actual_notes: 7,
-                    normal_notes: 4
-                })
-            ))
-        );
-
-        let result = NoteData::from_numeric_duration(112, 336);
-        assert_eq!(
-            result,
-            Some((
-                NoteType::Quaver,
-                false,
-                Some(TimeModification {
-                    actual_notes: 3,
-                    normal_notes: 2
-                })
-            ))
-        );
-    }
-
-    #[test]
-    fn test_tempo_into() {
-        let value: Tempo = 30.into();
-        assert_eq!(value.0, 5);
-    }
-
-    #[test]
-    fn test_encode_note() {
-        let mut note = Note::NoteC;
-        let mut alter = Alter::None;
-        let mut octave = Octave::Octave0;
-
-        assert_eq!(
-            NoteRestValue::derive_numeric_note(note, alter, octave),
-            Ok(NoteRestValue::Pitch(1))
-        );
-
-        alter = Alter::Sharp;
-        assert_eq!(
-            NoteRestValue::derive_numeric_note(note, alter, octave),
-            Ok(NoteRestValue::Pitch(2))
-        );
-
-        alter = Alter::None;
-        octave = Octave::Octave8;
-        assert_eq!(
-            NoteRestValue::derive_numeric_note(note, alter, octave),
-            Ok(NoteRestValue::Pitch(97))
-        );
-
-        alter = Alter::Flat;
-        assert_eq!(
-            NoteRestValue::derive_numeric_note(note, alter, octave),
-            Ok(NoteRestValue::Pitch(96))
-        );
-
-        note = Note::NoteD;
-        alter = Alter::None;
-        octave = Octave::Octave8;
-        assert_eq!(
-            NoteRestValue::derive_numeric_note(note, alter, octave),
-            Err(Error::OutofBounds)
-        );
-        note = Note::NoteC;
-        alter = Alter::Sharp;
-        octave = Octave::Octave8;
-        assert_eq!(
-            NoteRestValue::derive_numeric_note(note, alter, octave),
-            Err(Error::OutofBounds)
-        );
-        note = Note::NoteC;
-        alter = Alter::Flat;
-        octave = Octave::Octave0;
-        assert_eq!(
-            NoteRestValue::derive_numeric_note(note, alter, octave),
-            Err(Error::OutofBounds)
-        );
+impl From<NumericPitchRest> for PitchRest {
+    fn from(note_data: NumericPitchRest) -> PitchRest {
+        if note_data.get_numeric_value() == 0 {
+            PitchRest::Rest
+        } else if let Some(pabs) = note_data.get_pitch_octave() {
+            // TODO: Make this logic for processing alter string more terse
+            if pabs.pitch.alter == Alter::None {
+                return PitchRest::Pitch(PitchElement {
+                    step: pabs.pitch.step.to_string(),
+                    octave: pabs.octave as i8 + 1,
+                    alter: None,
+                });
+            } else {
+                return PitchRest::Pitch(PitchElement {
+                    step: pabs.pitch.step.to_string(),
+                    octave: pabs.octave as i8 + 1,
+                    alter: Some(pabs.pitch.alter.to_num_string()),
+                });
+            }
+        } else {
+            panic!("Decode composite note failed");
+        }
     }
 }
+
+pub fn get_staff(voice: Voice, num_voices: usize) -> String {
+    if num_voices < 3 {
+        if voice == Voice::One {
+            1.to_string()
+        } else {
+            2.to_string()
+        }
+    } else if voice == Voice::One || voice == Voice::Two {
+        1.to_string()
+    } else {
+        2.to_string()
+    }
+}
+
+pub struct NoteElementWrapper {
+    note_element: NoteElement,
+}
+
+impl NoteElementWrapper {
+    pub fn inner(&self) -> &NoteElement {
+        &self.note_element
+    }
+    pub fn create_wrap(
+        note: NoteData,
+        divisions: u32,
+        beats: Beats,
+        beat_type: BeatType,
+        t_modification: Option<TimeModificationElement>,
+        notations: Option<NotationsElement>,
+        num_voices: usize,
+    ) -> Self {
+        let note_element = NoteElement {
+            chord: if note.chord.eq(&Chord::Chord) {
+                Some(ChordElement {})
+            } else {
+                None
+            },
+            grace: if note.special_note != SpecialNote::None {
+                Some(GraceElement {
+                    slash: note.special_note.to_string(),
+                })
+            } else {
+                None
+            },
+            pitch_or_rest: PitchRest::from(note.note_rest),
+            duration: if note.special_note == SpecialNote::None {
+                Some(note.get_duration_string(
+                    divisions,
+                    u32::from(beats),
+                    u32::from(beat_type),
+                    t_modification.as_ref().map(TimeModification::from),
+                ))
+            } else {
+                None
+            },
+            beam: None,
+            stem: None,
+            dot: if note.dotted {
+                Some(DotElement {})
+            } else {
+                None
+            },
+            voice: (note.voice as u8 + 1).to_string(),
+            r#type: note.note_type.get_type_string(),
+            time_modification: t_modification,
+            staff: get_staff(note.voice, num_voices),
+            notations,
+        };
+        Self { note_element }
+    }
+}
+
+// #[cfg(test)]
+// mod tests {
+//     use super::{
+//         Alter, NoteData, NumericPitchRest, Octave, RhythmType, Tempo, TimeModification,
+//     };
+//     use super::{TupletActual, TupletNormal};
+//     use crate::error::Error;
+//     #[test]
+//     fn test_from_numeric_duration() {
+//         let result = NoteData::from_numeric_duration(36, 24);
+//         assert_eq!(result, Some((RhythmType::Crochet, true, None)));
+
+//         let result = NoteData::from_numeric_duration(1440, 480);
+//         assert_eq!(result, Some((RhythmType::Minim, true, None)));
+
+//         let result = NoteData::from_numeric_duration(1920, 480);
+//         assert_eq!(result, Some((RhythmType::SemiBreve, false, None)));
+
+//         let result = NoteData::from_numeric_duration(720, 480);
+//         assert_eq!(result, Some((RhythmType::Crochet, true, None)));
+
+//         let result = NoteData::from_numeric_duration(96, 336);
+//         assert_eq!(
+//             result,
+//             Some((
+//                 RhythmType::Quaver,
+//                 false,
+//                 Some(TimeModification {
+//                     actual_notes: TupletActual::Seven,
+//                     normal_notes: TupletNormal::Four
+//                 })
+//             ))
+//         );
+
+//         let result = NoteData::from_numeric_duration(112, 336);
+//         assert_eq!(
+//             result,
+//             Some((
+//                 RhythmType::Quaver,
+//                 false,
+//                 Some(TimeModification {
+//                     actual_notes: TupletActual::Three,
+//                     normal_notes: TupletNormal::Two
+//                 })
+//             ))
+//         );
+//     }
+
+//     #[test]
+//     fn test_tempo_into() {
+//         let value: Tempo = 30.into();
+//         assert_eq!(value.0, 5);
+//     }
+
+//     // #[test]
+//     // fn test_encode_note() {
+//     //     let mut note = Step::C;
+//     //     let mut alter = Alter::None;
+//     //     let mut octave = Octave::Octave0;
+
+//     //     assert_eq!(
+//     //         NumericPitchRest::derive_numeric_note(note, alter, octave),
+//     //         Ok(NumericPitchRest::Pitch(1))
+//     //     );
+
+//     //     alter = Alter::Sharp;
+//     //     assert_eq!(
+//     //         NumericPitchRest::derive_numeric_note(note, alter, octave),
+//     //         Ok(NumericPitchRest::Pitch(2))
+//     //     );
+
+//     //     alter = Alter::None;
+//     //     octave = Octave::Octave8;
+//     //     assert_eq!(
+//     //         NumericPitchRest::derive_numeric_note(note, alter, octave),
+//     //         Ok(NumericPitchRest::Pitch(97))
+//     //     );
+
+//     //     alter = Alter::Flat;
+//     //     assert_eq!(
+//     //         NumericPitchRest::derive_numeric_note(note, alter, octave),
+//     //         Ok(NumericPitchRest::Pitch(96))
+//     //     );
+
+//     //     note = Step::D;
+//     //     alter = Alter::None;
+//     //     octave = Octave::Octave8;
+//     //     assert_eq!(
+//     //         NumericPitchRest::derive_numeric_note(note, alter, octave),
+//     //         Err(Error::OutofBounds)
+//     //     );
+//     //     note = Step::C;
+//     //     alter = Alter::Sharp;
+//     //     octave = Octave::Octave8;
+//     //     assert_eq!(
+//     //         NumericPitchRest::derive_numeric_note(note, alter, octave),
+//     //         Err(Error::OutofBounds)
+//     //     );
+//     //     note = Step::C;
+//     //     alter = Alter::Flat;
+//     //     octave = Octave::Octave0;
+//     //     assert_eq!(
+//     //         NumericPitchRest::derive_numeric_note(note, alter, octave),
+//     //         Err(Error::OutofBounds)
+//     //     );
+//     // }
+// }

@@ -1,17 +1,19 @@
-
-use crate::measure_checker::MeasureChecker;
-use crate::notation::*;
-
 use log::warn;
+use mulib::pitch::{Alter, Octave, Pitch, PitchOctave, Step};
 use num_traits::FromPrimitive;
 use roxmltree::*;
-use std::collections::BTreeSet;
-use std::str::FromStr;
+use std::{collections::BTreeSet, str::FromStr};
 use strum::EnumCount;
+
+use crate::ir::notation::{
+    Arpeggiate, Articulation, Chord, NoteConnection, NoteData, NumericPitchRest, PhraseDynamics,
+    RhythmType, SlurConnection, SpecialNote, TimeModification, TupletData, TupletStartStop,
+};
+use crate::ir::{measure_checker::MeasureChecker, MusicElement, TupletNumber};
 
 const MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS: usize = TupletNumber::COUNT;
 
-pub fn handle_backup_tag(measure_element: &Node<'_, '_>, measure_checker: &mut MeasureChecker) {
+pub fn parse_backup_tag(measure_element: &Node<'_, '_>, measure_checker: &mut MeasureChecker) {
     let duration_tag = measure_element
         .first_element_child()
         .unwrap()
@@ -25,7 +27,7 @@ pub fn handle_backup_tag(measure_element: &Node<'_, '_>, measure_checker: &mut M
     measure_checker.conform_backup_placeholder_rests(duration_val as usize);
 }
 
-pub fn handle_direction_tag(measure_element: &Node<'_, '_>) -> Option<PhraseDynamics> {
+pub fn parse_direction_tag(measure_element: &Node<'_, '_>) -> Option<PhraseDynamics> {
     //Dynamics::from_str(t.tag_name().name()).expect("Unsupported dynamic type found.")
     let dynamics_tag = measure_element
         .children()
@@ -40,8 +42,14 @@ pub fn handle_direction_tag(measure_element: &Node<'_, '_>) -> Option<PhraseDyna
         None
     }
 }
+pub fn does_note_contain_unpitched(measure_element: &Node<'_, '_>) -> bool {
+    let unpitched = measure_element
+        .children()
+        .find(|n| n.has_tag_name("unpitched"));
+    unpitched.is_some()
+}
 
-pub fn handle_note_tag(
+pub fn parse_note_tag(
     measure_element: &Node<'_, '_>,
     measure_checker: &mut MeasureChecker,
     dynamic_value: &mut Option<PhraseDynamics>,
@@ -143,7 +151,8 @@ pub fn handle_note_tag(
         };
 
         note_data.articulation = if let Some(t) = artic_tag {
-            Articulation::from_str(t.first_element_child().unwrap().tag_name().name()).expect("Articulation::from_str method never returns Err")
+            Articulation::from_str(t.first_element_child().unwrap().tag_name().name())
+                .expect("Articulation::from_str method never returns Err")
         } else {
             Articulation::None
         };
@@ -188,7 +197,7 @@ pub fn handle_note_tag(
     }
 
     note_data.note_type = if let Some(n) = note_type {
-        NoteType::from_str(n.text().unwrap()).unwrap()
+        RhythmType::from_str(n.text().unwrap()).unwrap()
     } else {
         // Whole rests sometimes provide no "type" tag, but whole rests are different durations
         // depending on the time signature, so we must manually calculate the rhythm value based on duration
@@ -213,7 +222,7 @@ pub fn handle_note_tag(
     match rest_tag {
         Some(_) => {
             //debug!("rest {:?}", note_data.rhythm_value);
-            note_data.note_rest = NoteRestValue::Rest;
+            note_data.note_rest = NumericPitchRest::Rest;
         }
         None => {
             let chord_tag = measure_element.children().find(|n| n.has_tag_name("chord"));
@@ -227,18 +236,20 @@ pub fn handle_note_tag(
 
             // alter tags are optional, others are mandatory
             let alter_note = match alter_tag {
-                Some(t) => Alter::from_str(t.text().unwrap()).unwrap(),
+                Some(t) => Alter::from_num_string(t.text().unwrap()).unwrap(),
                 None => Alter::None,
             };
             note_data.chord = match chord_tag {
                 Some(_t) => Chord::Chord,
                 None => Chord::NoChord,
             };
-            note_data.note_rest = NoteRestValue::derive_numeric_note(
-                Note::from_str(step_tag.unwrap().text().unwrap()).unwrap(),
-                alter_note,
-                Octave::from_str(octave_tag.unwrap().text().unwrap()).unwrap(),
-            )
+            note_data.note_rest = NumericPitchRest::from_pitch_octave(PitchOctave {
+                pitch: Pitch {
+                    step: Step::from_str(step_tag.unwrap().text().unwrap()).unwrap(),
+                    alter: alter_note,
+                },
+                octave: Octave::from_str(octave_tag.unwrap().text().unwrap()).unwrap(),
+            })
             .expect("Parsed note is not supported by Music2Bin format.");
             //debug!(
             //    "note {:?} number: {:?}",

@@ -1,21 +1,18 @@
 #![allow(dead_code)]
-mod bin_decoder;
-mod bin_encoder;
-mod bin_to_xml;
+mod bin_format;
+mod cli_handlers;
 mod error;
-mod music_xml_types;
-mod notation;
+mod ir;
+mod repl_funcs;
 mod utils;
-mod xml_to_bin;
-mod measure_checker;
-mod xml_elem_handlers;
-mod xml_multipart;
 
-use crate::error::Error;
-use crate::bin_to_xml::process_bin_to_xml;
-use crate::xml_multipart::process_xml_multipart;
-use crate::xml_to_bin::process_xml_to_bin;
+use crate::error::Result;
+
+use cli_handlers::{
+    process_bin_to_xml, process_end_to_end, process_xml_multi, process_xml_to_bin, repl_shell,
+};
 use env_logger::Env;
+use log::LevelFilter;
 use std::path::PathBuf;
 use structopt::StructOpt;
 
@@ -27,7 +24,11 @@ enum Mode {
     #[structopt(name = "bin2xml")]
     Bin2Xml,
     #[structopt(name = "xmlmulti")]
-    XmlMultiPart,
+    XmlMulti,
+    #[structopt(name = "e2e")]
+    End2End,
+    #[structopt(name = "shell")]
+    Shell,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -56,20 +57,31 @@ struct CliOpts {
     mode: Option<Mode>,
 }
 
-fn main() -> Result<(), Error> {
-    env_logger::Builder::from_env(Env::default().default_filter_or("trace")).init();
+fn main() -> Result<()> {
+    let mut builder = env_logger::Builder::from_env(Env::default());
+
+    builder
+        .filter(Some("repl_funcs"), LevelFilter::Info)
+        .filter(Some("cli_handlers"), LevelFilter::Info)
+        .init();
 
     let cli_opt = CliOpts::from_args();
 
     match cli_opt.mode {
-        Some(Mode::Bin2Xml) => {
-            process_bin_to_xml(cli_opt.input, cli_opt.output, cli_opt.dump_input)?;
+        Some(Mode::End2End) => {
+            process_end_to_end(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)?;
         }
-        Some(Mode::XmlMultiPart) => {
-            process_xml_multipart(cli_opt.input, cli_opt.output, cli_opt.dump_input)?;
+        Some(Mode::Bin2Xml) => {
+            process_bin_to_xml(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)?;
+        }
+        Some(Mode::XmlMulti) => {
+            process_xml_multi(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)?;
         }
         Some(Mode::Xml2Bin) => {
-            process_xml_to_bin(cli_opt.input, cli_opt.output, cli_opt.dump_input)?;
+            process_xml_to_bin(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)?;
+        }
+        Some(Mode::Shell) => {
+            repl_shell()?;
         }
         None => {
             println!("No command mode provided.")
