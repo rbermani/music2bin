@@ -1,18 +1,20 @@
 use super::muxml_parser::{
     does_note_contain_unpitched, parse_backup_tag, parse_direction_tag, parse_note_tag,
 };
-use crate::error::Result;
+use crate::error::{Result,Error};
 use crate::ir::notation::{
     BeatType, Beats, Ending, KeySignature, MeasureInitializer, MeasureMetaData, MeasureStartEnd,
-    Tempo,
+    Tempo
 };
 use crate::ir::{MusicalPart, PartMap};
 
 use log::info;
 use roxmltree::*;
 use std::str::FromStr;
+
 const MAX_SUPPORTED_PARTS: usize = 4;
-pub fn xml_to_ir(docstring: String, _dump_input: bool) -> Result<PartMap> {
+
+pub fn multipartxml_to_ir(docstring: String, _dump_input: bool, input_filename: &str) -> Result<PartMap> {
     let opt = ParsingOptions {
         allow_dtd: true,
         ..ParsingOptions::default()
@@ -37,7 +39,19 @@ pub fn xml_to_ir(docstring: String, _dump_input: bool) -> Result<PartMap> {
         "Preprocessing check found {} possible parts",
         ir_part_map.num_part_ids()
     );
-
+    if ir_part_map.num_part_ids() > MAX_SUPPORTED_PARTS {
+        println!("The number of parts {} exceeds the supported amount {}", ir_part_map.num_part_ids(), MAX_SUPPORTED_PARTS);
+        return Err(Error::Unit);
+    }
+    if ir_part_map.num_part_ids() == MAX_SUPPORTED_PARTS {
+        println!("File name {}", input_filename);
+        for score_part in xml_score_parts {
+            match score_part.descendants().find(|n| n.has_tag_name("part-name")).unwrap().text() {
+                Some(t) => println!("Name {}", t),
+                None => (),
+            }
+        }
+    }
     let ir_parts: Vec<String> = ir_part_map.keys();
     let mut remove_cur_part = false;
     let mut total_voices: usize = 0;
@@ -224,5 +238,10 @@ pub fn xml_to_ir(docstring: String, _dump_input: bool) -> Result<PartMap> {
     // At this point, any vec_idx that is still None in the parts list can be discarded from the BTreeMap
     let parts_removed = ir_part_map.get_removed_parts();
     println!("Processing step removed {} parts", parts_removed);
+
+    // Combine parts into one part
+    // if total_voice == 4 && ir_part_map.num_parts() == 4 {
+
+    // }
     Ok(ir_part_map)
 }

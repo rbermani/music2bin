@@ -2,46 +2,49 @@ use log::warn;
 use mulib::pitch::{Alter, Octave, Pitch, PitchOctave, Step};
 use num_traits::FromPrimitive;
 use roxmltree::*;
-use std::{collections::BTreeSet, str::FromStr};
+use std::str::FromStr;
 use strum::EnumCount;
 
 use crate::ir::notation::{
     Arpeggiate, Articulation, Chord, NoteConnection, NoteData, NumericPitchRest, PhraseDynamics,
     RhythmType, SlurConnection, SpecialNote, TimeModification, TupletData, TupletStartStop,
 };
-use crate::ir::{measure_checker::MeasureChecker, MusicElement, TupletNumber};
+use crate::ir::{MusicElement, TupletNumber};
+
+use super::MusicalPart;
 
 const MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS: usize = TupletNumber::COUNT;
 
-pub fn parse_backup_tag(measure_element: &Node<'_, '_>, measure_checker: &mut MeasureChecker) {
-    let duration_tag = measure_element
+pub fn parse_backup_tag(measure_element: &Node<'_, '_>, part: &mut MusicalPart) {
+    let xml_duration_tag = measure_element
         .first_element_child()
         .unwrap()
         .text()
         .unwrap();
-    let duration_val = duration_tag.parse::<u32>().unwrap();
+    let duration_val = xml_duration_tag.parse::<u32>().unwrap();
     // If the backup tag did not move fully back to measure start time before
     // the new voice notes were inserted, we must insert a placeholder rest
     // as a substitute for the time, because musicbin format does not have a concept of backup or support incomplete
     // measures or voices beginning in the middle of the measure
-    measure_checker.conform_backup_placeholder_rests(duration_val as usize);
+    part.update_backup_duration(duration_val as usize);
 }
 
-pub fn parse_direction_tag(measure_element: &Node<'_, '_>) -> Option<PhraseDynamics> {
-    //Dynamics::from_str(t.tag_name().name()).expect("Unsupported dynamic type found.")
-    let dynamics_tag = measure_element
+pub fn parse_direction_tag(measure_element: &Node<'_, '_>, part: &mut MusicalPart) {
+
+    let xml_dynamics_tag = measure_element
         .children()
         .find(|n| n.has_tag_name("dynamics"));
 
-    if let Some(val) = dynamics_tag {
-        match PhraseDynamics::from_str(val.first_element_child().unwrap().tag_name().name()) {
+    if xml_dynamics_tag.is_some() {
+        part.cur_phrase_dyn = match PhraseDynamics::from_str(xml_dynamics_tag.unwrap().first_element_child().unwrap().tag_name().name()) {
             Ok(t) => Some(t),
             Err(_) => None,
-        }
+        };
     } else {
-        None
+        part.cur_phrase_dyn = None;
     }
 }
+
 pub fn does_note_contain_unpitched(measure_element: &Node<'_, '_>) -> bool {
     let unpitched = measure_element
         .children()
@@ -50,20 +53,18 @@ pub fn does_note_contain_unpitched(measure_element: &Node<'_, '_>) -> bool {
 }
 
 pub fn parse_note_tag(
-    measure_element: &Node<'_, '_>,
-    measure_checker: &mut MeasureChecker,
-    dynamic_value: &mut Option<PhraseDynamics>,
-    voices: &mut BTreeSet<u8>,
+    xml_measure_element: &Node<'_, '_>,
+    part: &mut MusicalPart
 ) {
     let mut note_data = NoteData::default();
     let mut stop_tuplet_elem: Option<MusicElement> = None;
-    let note_type = measure_element.children().find(|n| n.has_tag_name("type"));
-    let xml_note_duration = measure_element
+    let xml_note_type_tag = xml_measure_element.children().find(|n| n.has_tag_name("type"));
+    let xml_note_duration = xml_measure_element
         .children()
         .find(|n| n.has_tag_name("duration"));
-    let dotted = measure_element.children().find(|n| n.has_tag_name("dot"));
-    let grace_note = measure_element.children().find(|n| n.has_tag_name("grace"));
-    note_data.special_note = match grace_note {
+    let xml_dot_tag = xml_measure_element.children().find(|n| n.has_tag_name("dot"));
+    let xml_grace_tag = xml_measure_element.children().find(|n| n.has_tag_name("grace"));
+    note_data.special_note = match xml_grace_tag {
         Some(n) => match n.attribute("slash") {
             None => SpecialNote::None,
             Some(t) => SpecialNote::from_str(t).expect("Unsupported Tied Type"),
@@ -71,18 +72,18 @@ pub fn parse_note_tag(
         None => SpecialNote::None,
     };
 
-    if dotted.is_some() {
+    if xml_dot_tag.is_some() {
         note_data.dotted = true;
     }
 
-    let time_mod_tag = measure_element
+    let time_mod_tag = xml_measure_element
         .children()
         .find(|n| n.has_tag_name("time-modification"));
-    let notations_tag = measure_element
+    let notations_tag = xml_measure_element
         .children()
         .find(|n| n.has_tag_name("notations"));
-    let rest_tag = measure_element.children().find(|n| n.has_tag_name("rest"));
-    let voice_text = measure_element
+    let rest_tag = xml_measure_element.children().find(|n| n.has_tag_name("rest"));
+    let voice_text = xml_measure_element
         .children()
         .find(|n| n.has_tag_name("voice"))
         .unwrap()
@@ -91,17 +92,13 @@ pub fn parse_note_tag(
     let voice_num = voice_text
         .parse::<u8>()
         .expect("Unable to parse voices string");
-    voices.insert(voice_num);
-    let voice_idx = voices.iter().position(|&x| x == voice_num).unwrap();
 
-    if voices.len() > MeasureChecker::MAX_SUPPORTED_VOICES {
-        warn!("Too many voices case, skipping notes");
-        // Don't let the number of voices in the voices set exceed the maximum
-        voices.remove(&voice_num);
-        return;
-    } else {
-        note_data.voice = FromPrimitive::from_u8((voice_idx) as u8)
-            .expect("Unable to FromPrimitive on u8 to voice type.");
+    match part.insert_new_voice(voice_num) {
+        Ok(_) => (),
+        Err(e) => {
+            warn!("insert_new_voice err: {} Too many voices case, skipping notes", e.to_string());
+            return;
+        },
     }
 
     let time_mod_value = if let Some(n) = time_mod_tag {
@@ -118,10 +115,9 @@ pub fn parse_note_tag(
         None
     };
 
-    if let Some(phrase_dyn) = dynamic_value {
-        note_data.phrase_dynamics = *phrase_dyn;
-        *dynamic_value = None;
-    }
+    note_data.phrase_dynamics = part.cur_phrase_dyn.unwrap_or_default();
+    part.cur_phrase_dyn = None;
+
     if let Some(n) = notations_tag {
         let tuplet_tags = n.children().filter(|n| n.has_tag_name("tuplet"));
         let tied_tag = n.children().find(|n| n.has_tag_name("tied"));
@@ -133,7 +129,7 @@ pub fn parse_note_tag(
         if num_tuplets > MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS {
             panic!(
                 "measure_idx: {} Maximum number of supported tuplet tags {} was exceeded by {}",
-                measure_checker.measure_idx(),
+                part.get_measure_idx(),
                 MAX_NUMBER_OF_SUPPORTED_TUPLET_ELEMENTS,
                 num_tuplets,
             )
@@ -168,7 +164,7 @@ pub fn parse_note_tag(
                 for t in tuplet_tags {
                     match t.attribute("type").unwrap() {
                         "start" => {
-                            measure_checker.push_elem(MusicElement::Tuplet(TupletData {
+                            part.push_measure_elem(MusicElement::Tuplet(TupletData {
                                 start_stop: TupletStartStop::TupletStart,
                                 tuplet_number: TupletNumber::One,
                                 actual_notes: time_mod_value.get_actual(),
@@ -196,7 +192,7 @@ pub fn parse_note_tag(
         }
     }
 
-    note_data.note_type = if let Some(n) = note_type {
+    note_data.note_type = if let Some(n) = xml_note_type_tag {
         RhythmType::from_str(n.text().unwrap()).unwrap()
     } else {
         // Whole rests sometimes provide no "type" tag, but whole rests are different durations
@@ -204,7 +200,7 @@ pub fn parse_note_tag(
         if let Some(n) = xml_note_duration {
             if let Some((rest_duration, is_dotted, time_mod)) = NoteData::from_numeric_duration(
                 n.text().unwrap().parse::<u32>().unwrap(),
-                measure_checker.quarter_division(),
+                part.get_cur_quarter_divisions(),
             ) {
                 if time_mod.is_some() {
                     warn!("time modification for rest is present, but not being used.")
@@ -225,8 +221,8 @@ pub fn parse_note_tag(
             note_data.note_rest = NumericPitchRest::Rest;
         }
         None => {
-            let chord_tag = measure_element.children().find(|n| n.has_tag_name("chord"));
-            let pitch_tag = measure_element
+            let chord_tag = xml_measure_element.children().find(|n| n.has_tag_name("chord"));
+            let pitch_tag = xml_measure_element
                 .children()
                 .find(|n| n.has_tag_name("pitch"))
                 .unwrap();
@@ -259,8 +255,8 @@ pub fn parse_note_tag(
     }
 
     // The MeasureChecker checks for correct total duration. Incomplete voices are thrown away.
-    measure_checker.push_elem(MusicElement::NoteRest(note_data));
+    part.push_measure_elem(MusicElement::NoteRest(note_data));
     if let Some(st_elem) = stop_tuplet_elem {
-        measure_checker.push_elem(st_elem);
+        part.push_measure_elem(st_elem);
     }
 }

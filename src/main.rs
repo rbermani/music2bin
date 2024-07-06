@@ -6,10 +6,10 @@ mod ir;
 mod repl_funcs;
 mod utils;
 
-use crate::error::Result;
+use crate::error::{Result,Error};
 
 use cli_handlers::{
-    process_bin_to_xml, process_end_to_end, process_xml_multi, process_xml_to_bin, repl_shell,
+    process_bin_to_xml, process_end_to_end, process_multipartxml_to_bin, process_xml_multi, process_xml_to_bin, repl_shell
 };
 use env_logger::Env;
 use log::LevelFilter;
@@ -29,6 +29,8 @@ enum Mode {
     End2End,
     #[structopt(name = "shell")]
     Shell,
+    #[structopt(name = "multipartxml2bin")]
+    MultiPartXml2Bin,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -67,25 +69,33 @@ fn main() -> Result<()> {
 
     let cli_opt = CliOpts::from_args();
 
-    match cli_opt.mode {
+    let result: Result<()> = match cli_opt.mode {
         Some(Mode::End2End) => {
-            process_end_to_end(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)?;
+            process_end_to_end(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)
         }
         Some(Mode::Bin2Xml) => {
-            process_bin_to_xml(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)?;
+            process_bin_to_xml(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)
         }
         Some(Mode::XmlMulti) => {
-            process_xml_multi(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)?;
+            process_xml_multi(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)
         }
         Some(Mode::Xml2Bin) => {
-            process_xml_to_bin(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)?;
+            process_xml_to_bin(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)
         }
         Some(Mode::Shell) => {
-            repl_shell()?;
+            match repl_shell() {
+                Ok(_) => Ok(()),
+                Err(err) => Err(Error::from(err)),
+            }
+        }
+        Some(Mode::MultiPartXml2Bin) => {
+            process_multipartxml_to_bin(&cli_opt.input, &cli_opt.output, cli_opt.dump_input)
         }
         None => {
-            println!("No command mode provided.")
+            println!("No command mode provided.");
+            Ok(())
         }
-    }
+    };
+
     Ok(())
 }

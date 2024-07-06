@@ -12,17 +12,25 @@ use std::collections::BTreeMap;
 
 type VecIdx = usize;
 type PartCount = usize;
+type PartId = String;
+type PartIdIndex = Option<VecIdx>;
+type PartIdPair<'a> = (&'a PartId, &'a PartIdIndex); // Alias for the reference pair
+type PartIdMap = BTreeMap<PartId, PartIdIndex>;
+type PartIdValue = Option<MusicalPart>;
+type PartIdRefValue<'a> = Option<&'a MusicalPart>;
 
 #[derive(Eq, PartialEq, Default, Debug, Clone)]
 pub struct PartMap {
-    part_ids: BTreeMap<String, Option<VecIdx>>,
-    parts: Vec<Option<MusicalPart>>,
+    part_ids: PartIdMap,
+    parts: Vec<PartIdValue>,
 }
 
 impl PartMap {
+    const MAX_SUPPORTED_VOICES: usize = 4;
+
     pub fn new() -> PartMap {
         PartMap {
-            part_ids: BTreeMap::new(),
+            part_ids: PartIdMap::new(),
             parts: vec![],
         }
     }
@@ -30,7 +38,7 @@ impl PartMap {
     pub fn get_removed_parts(&self) -> PartCount {
         self.part_ids.iter().fold(
             0,
-            |acc: usize, (_k, val): (&String, &Option<PartCount>)| {
+            |acc: usize, (_k, val): PartIdPair | {
                 if val.is_none() {
                     acc + 1
                 } else {
@@ -44,19 +52,19 @@ impl PartMap {
         self.part_ids.keys().map(|key| key.to_string()).collect()
     }
 
-    pub fn get_part_ids(&self) -> BTreeMap<String, Option<usize>> {
+    pub fn get_part_ids(&self) -> PartIdMap {
         self.part_ids.clone()
     }
 
-    pub fn num_part_ids(&self) -> usize {
+    pub fn num_part_ids(&self) -> PartCount {
         self.part_ids.len()
     }
 
-    pub fn num_parts(&self) -> usize {
+    pub fn num_parts(&self) -> PartCount {
         self.parts.len()
     }
 
-    pub fn get_part(&self, idx: usize) -> Option<&MusicalPart> {
+    pub fn get_part(&self, idx: usize) -> PartIdRefValue {
         if let Some(val) = self.parts.get(idx) {
             val.as_ref()
         } else {
@@ -69,12 +77,18 @@ impl PartMap {
             println!("No existing value was present for key");
         }
     }
+    /// Combine musical parts (if feasible)
+    ///
+    /// Combines the parts in the map into one if the number and configuration
+    /// of each part is the same
+    pub fn combine_parts(&mut self) {
 
+    }
     // pub fn extend_parts(&mut self, musical_parts: Vec<MusicalPart>) {
     //     self.parts.extend(musical_parts);
     // }
 
-    fn insert_part_id(&mut self, part_key: &str, val: Option<VecIdx>) {
+    fn insert_part_id(&mut self, part_key: &str, val: PartIdIndex) {
         self.part_ids.insert(part_key.to_string(), val);
     }
 

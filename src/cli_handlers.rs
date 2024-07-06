@@ -1,7 +1,7 @@
 use crate::bin_format::{bin_to_ir, ir_to_bin};
 use crate::error::{Error, Result};
 use crate::ir::ir_to_xml::ir_to_xml;
-use crate::ir::{xml_to_ir, PartMap};
+use crate::ir::{xml_to_ir, multipartxml_to_ir, PartMap};
 use crate::repl_funcs::{add, append, hello, prepend, Context};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
@@ -27,6 +27,18 @@ pub fn process_bin_to_xml(input: &PathBuf, output: &PathBuf, dump_input: bool) -
     outfile
         .write_all(output.as_bytes())
         .expect("IO Error occurred on write_all()");
+    Ok(())
+}
+
+pub fn process_multipartxml_to_bin(input: &PathBuf, output: &PathBuf, dump_input: bool) -> Result<()> {
+    let outfile = File::create(output).expect("IO Error Occurred");
+    let docstring = fs::read_to_string(input).unwrap();
+    let writer = BufWriter::new(outfile);
+
+    // xml to bin only writes the first part, because MuBin only supports a single part
+    let partmap = multipartxml_to_ir(docstring, dump_input, input.as_path().to_str().unwrap())?;
+    let part = partmap.get_part(0).unwrap();
+    ir_to_bin(writer, part, dump_input)?;
     Ok(())
 }
 

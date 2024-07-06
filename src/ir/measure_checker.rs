@@ -2,13 +2,13 @@ use super::notation::{
     BeatType, Beats, Chord, MeasureInitializer, MusicElement, NoteData, SpecialNote,
     TimeModification, Voice,
 };
-use log::{error, info, trace, warn};
-use num::integer::lcm;
+use log::{error, info, warn};
 use num_traits::FromPrimitive;
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::convert::From;
 
+#[derive(Eq, PartialEq, Default, Debug, Clone)]
 pub struct MeasureChecker {
     measure: Vec<MusicElement>,
     elems_since_backup: usize,
@@ -227,60 +227,4 @@ impl MeasureChecker {
             }
         }
     }
-}
-
-struct DivisionsVec {
-    inner: Vec<u32>,
-}
-
-impl DivisionsVec {
-    // Create a new, empty DivisionsVec
-    pub fn new() -> Self {
-        DivisionsVec { inner: vec![] }
-    }
-
-    // Add an item to the DivisionsVec, but only if it's not already present
-    pub fn add(&mut self, value: u32) {
-        if value != 0 && !self.inner.contains(&value) {
-            self.inner.push(value);
-        }
-    }
-
-    pub fn find_lcm(&mut self) -> u32 {
-        self.inner.iter().fold(1, |acc, &n| lcm(acc, n))
-    }
-
-    // Allow direct access to the inner Vec<u32>
-    #[allow(dead_code)]
-    pub fn inner(&self) -> &Vec<u32> {
-        &self.inner
-    }
-}
-
-pub fn calc_divisions_voices(music_elems_v: Vec<MusicElement>, dump_input: bool) -> (u32, usize) {
-    let mut voices = BTreeSet::new();
-    let mut integers_v = DivisionsVec::new();
-    let mut time_mod = None;
-
-    for elem in music_elems_v.iter() {
-        if dump_input {
-            trace!("{:?}", elem);
-        }
-        match elem {
-            MusicElement::Tuplet(t) => {
-                time_mod = (*t).into();
-            }
-            MusicElement::NoteRest(n) => {
-                voices.insert(n.voice as u8);
-                integers_v.add(n.get_note_multiple(time_mod).map_or_else(|| 0, |v| v));
-            }
-            _ => {}
-        }
-    }
-
-    // for (idx, elem) in integers_v.inner().iter().enumerate() {
-    //     println!("{idx},{elem}");
-    // }
-
-    (integers_v.find_lcm(), voices.len())
 }

@@ -37,7 +37,7 @@ fn ser_measure_init(
     *cur_beat_type = e.beat_type;
     m.number = cur_measure_idx.to_string();
     m.attributes = Some(AttributesElement {
-        divisions: part.get_divisions().unwrap().to_string(),
+        divisions: part.get_initial_divisions().unwrap().to_string(),
         key: KeyElement {
             fifths: e.key_sig.to_string(),
         },
@@ -184,7 +184,7 @@ fn ser_note_rest(
                         dynamics: Some(cur_dynamic),
                     }),
                 },
-                staff: get_staff(e.voice, part.get_num_voices().unwrap()),
+                staff: get_staff(e.voice, part.get_num_voices()),
                 sound: None,
             }));
     }
@@ -211,7 +211,7 @@ fn ser_note_rest(
     // }
     if e.chord.eq(&Chord::NoChord) {
         let val = e.get_duration_numeric(
-            part.get_divisions().unwrap(),
+            part.get_initial_divisions().unwrap(),
             u32::from(cur_beat),
             u32::from(cur_beat_type),
             cur_t_modification.as_ref().map(TimeModification::from),
@@ -268,12 +268,12 @@ fn ser_note_rest(
     }
     let note_element_wrap = NoteElementWrapper::create_wrap(
         e,
-        part.get_divisions().unwrap(),
+        part.get_initial_divisions().unwrap(),
         cur_beat,
         cur_beat_type,
         cur_t_modification.as_ref().cloned(),
         notations,
-        part.get_num_voices().unwrap(),
+        part.get_num_voices(),
     );
     m.direction_note.push(MeasureDirectionNote::Note(
         note_element_wrap.inner().clone(),
@@ -328,7 +328,7 @@ fn from_musical_part(t: &MusicalPart) -> Vec<Measure> {
     // However, there will need to be additional heuristics for properly notating based on actual note octaves
     // in the future.
 
-    if t.get_divisions().is_none() || t.get_num_voices().is_none() {
+    if t.get_initial_divisions().is_none() || t.get_num_voices() == 0 {
         return vec![];
     }
     let mut measures: Vec<Measure> = vec![];
